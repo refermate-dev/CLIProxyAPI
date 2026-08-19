@@ -496,6 +496,22 @@ func convertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 	if len(messageBlocks) == 0 && (len(systemBlocks) > 0 || hadMessages) {
 		messageBlocks = append(messageBlocks, []byte(`{"role":"user","content":[{"type":"text","text":""}]}`))
 	}
+	// LOCAL PATCH (remove when upstream fixes this): Anthropic rejects a
+	// request whose FINAL message is an assistant message ending in a thinking
+	// block - "The final block in an assistant message cannot be `thinking`".
+	// A Responses history can end with a dangling reasoning item (an
+	// interrupted turn that produced no output after the user's last message),
+	// and convertResponsesReasoningToClaudeThinking keeps it whenever its
+	// encrypted_content carries a Claude-compatible signature, so the request
+	// 400s upstream. Mid-history thinking-only assistant messages are valid and
+	// deliberately produced here (see the flush-before-user tests), so only the
+	// trailing message is sanitized: trim its trailing thinking blocks and drop
+	// it entirely when nothing else remains. Compat endpoints
+	// (preserveEmptyThinkingBlocks) are non-Anthropic upstreams with their own
+	// signature formats and no such constraint, so they are left alone.
+	if !preserveEmptyThinkingBlocks {
+		messageBlocks = dropTrailingFinalAssistantThinking(messageBlocks)
+	}
 	out = common.SetRawArrayItems(out, "messages", messageBlocks)
 	if len(systemBlocks) > 0 {
 		out, _ = sjson.SetRawBytes(out, "system", common.JoinRawArray(systemBlocks))
@@ -1287,4 +1303,50 @@ func isUnsupportedOpenAIBuiltinToolType(toolType string) bool {
 	default:
 		return false
 	}
+}
+
+// dropTrailingFinalAssistantThinking sanitizes only the last message: when it
+// is an assistant message whose content ends in thinking/redacted_thinking
+// blocks, those trailing blocks are removed, and the message is dropped when no
+// content survives (repeating while the new tail has the same shape). Earlier
+// messages are never touched. See the call site for why this exists.
+func dropTrailingFinalAssistantThinking(messageBlocks [][]byte) [][]byte {
+	for len(messageBlocks) > 0 {
+		last := len(messageBlocks) - 1
+		message := gjson.ParseBytes(messageBlocks[last])
+		if !strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "assistant") {
+			return messageBlocks
+		}
+		content := message.Get("content")
+		if !content.IsArray() {
+			return messageBlocks
+		}
+		parts := content.Array()
+		keep := len(parts)
+		for keep > 0 {
+			partType := strings.TrimSpace(parts[keep-1].Get("type").String())
+			if partType != "thinking" && partType != "redacted_thinking" {
+				break
+			}
+			keep--
+		}
+		if keep == len(parts) {
+			return messageBlocks
+		}
+		if keep == 0 {
+			messageBlocks = messageBlocks[:last]
+			continue
+		}
+		kept := make([]string, 0, keep)
+		for index := 0; index < keep; index++ {
+			kept = append(kept, parts[index].Raw)
+		}
+		updated, errSet := sjson.SetRawBytes(messageBlocks[last], "content", []byte("["+strings.Join(kept, ",")+"]"))
+		if errSet != nil {
+			return messageBlocks
+		}
+		messageBlocks[last] = updated
+		return messageBlocks
+	}
+	return messageBlocks
 }
