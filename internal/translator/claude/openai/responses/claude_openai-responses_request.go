@@ -511,6 +511,10 @@ func convertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 	// signature formats and no such constraint, so they are left alone.
 	if !preserveEmptyThinkingBlocks {
 		messageBlocks = dropTrailingFinalAssistantThinking(messageBlocks)
+		// LOCAL PATCH 2 (remove when upstream fixes this): see
+		// dropAmbiguousThinkingSets below. It runs after the trailing sanitizer
+		// because that one can drop the whole last message.
+		messageBlocks = dropAmbiguousThinkingSets(messageBlocks)
 	}
 	out = common.SetRawArrayItems(out, "messages", messageBlocks)
 	if len(systemBlocks) > 0 {
@@ -1347,6 +1351,89 @@ func dropTrailingFinalAssistantThinking(messageBlocks [][]byte) [][]byte {
 		}
 		messageBlocks[last] = updated
 		return messageBlocks
+	}
+	return messageBlocks
+}
+
+// isLocalAmbiguousThinkingPart reports whether a Claude content part is a
+// thinking block. Deliberately separate from the inline check inside
+// dropTrailingFinalAssistantThinking so LOCAL PATCH 2 can be removed on its own.
+func isLocalAmbiguousThinkingPart(part gjson.Result) bool {
+	partType := strings.TrimSpace(part.Get("type").String())
+	return partType == "thinking" || partType == "redacted_thinking"
+}
+
+// dropAmbiguousThinkingSets removes every thinking block from an assistant
+// message that carries adjacent thinking blocks.
+//
+// LOCAL PATCH 2 (remove when upstream fixes this). Anthropic requires the
+// thinking blocks it receives back to match the response that produced them,
+// bit for bit and as a complete set, and otherwise fails the request with
+// "thinking or redacted_thinking blocks in the latest assistant message cannot
+// be modified". That message names the latest assistant message, but the check
+// is not limited to it: a captured 98-message body was rejected while its
+// latest assistant message was a legal thinking+tool_use pair, and it was
+// accepted once the two thinking blocks were removed from message 94, four
+// turns back. The reported index (messages.3.content.54 for that body) does not
+// address the message that was sent, so it cannot be used to locate the
+// offender either. The only reliable signal is the shape, so every assistant
+// message is checked.
+//
+// Items from two responses can still merge because the Responses input array
+// carries no response boundary and appendParts flushes only on a role change. A
+// reasoning-only response followed by another reasoning item therefore creates
+// adjacent thinking blocks that never belonged to the same Claude response.
+// Upstream now round-trips server-side search blocks, so genuine interleaved
+// thinking remains separated by text, search, or tool blocks and is preserved.
+// Anthropic accepts an assistant message that carries no thinking blocks, which
+// several messages in the same captured body already do.
+// The non-Anthropic compat path (preserveEmptyThinkingBlocks) is untouched
+// because it has its own signature formats and no such constraint.
+func dropAmbiguousThinkingSets(messageBlocks [][]byte) [][]byte {
+	for index := range messageBlocks {
+		message := gjson.ParseBytes(messageBlocks[index])
+		if !strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "assistant") {
+			continue
+		}
+		content := message.Get("content")
+		if !content.IsArray() {
+			continue
+		}
+		parts := content.Array()
+		thinkingCount := 0
+		hasAdjacentThinking := false
+		previousThinking := false
+		for _, part := range parts {
+			isThinking := isLocalAmbiguousThinkingPart(part)
+			if isThinking {
+				thinkingCount++
+				if previousThinking {
+					hasAdjacentThinking = true
+				}
+			}
+			previousThinking = isThinking
+		}
+		if !hasAdjacentThinking {
+			continue
+		}
+		kept := make([]string, 0, len(parts)-thinkingCount)
+		for _, part := range parts {
+			if isLocalAmbiguousThinkingPart(part) {
+				continue
+			}
+			kept = append(kept, part.Raw)
+		}
+		if len(kept) == 0 {
+			// Thinking only: an empty content array is itself rejected, and removing
+			// the message would leave two user messages adjacent, so leave it alone.
+			// A trailing one is already handled by dropTrailingFinalAssistantThinking.
+			continue
+		}
+		updated, errSet := sjson.SetRawBytes(messageBlocks[index], "content", []byte("["+strings.Join(kept, ",")+"]"))
+		if errSet != nil {
+			continue
+		}
+		messageBlocks[index] = updated
 	}
 	return messageBlocks
 }
