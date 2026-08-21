@@ -18,7 +18,10 @@ const (
 
 // ClaudeHeadersIndicateUnifiedRateLimitRejection reports whether response headers explicitly
 // declare an Anthropic shared 5h or 7d rate-limit rejection. A Fable-only 7d_oi rejection
-// remains model-scoped when both shared windows are explicitly allowed (status "allowed" or "allowed_warning").
+// remains model-scoped unless a shared window (5h or 7d) is explicitly rejected; shared
+// windows reported as "allowed" or omitted from the headers do not escalate the cooldown
+// to the whole credential, because Anthropic's unified status can be "rejected" solely on
+// behalf of the Fable (7d_oi) window.
 func ClaudeHeadersIndicateUnifiedRateLimitRejection(headers http.Header) bool {
 	if headers == nil {
 		return false
@@ -32,11 +35,15 @@ func ClaudeHeadersIndicateUnifiedRateLimitRejection(headers http.Header) bool {
 	if status7d == "rejected" {
 		return true
 	}
-	if unifiedStatus != "rejected" {
+	status7dOI := strings.ToLower(strings.TrimSpace(getHeaderCaseInsensitive(headers, "Anthropic-Ratelimit-Unified-7d_oi-Status")))
+	// Fable-only pattern: 7d_oi rejected while neither shared window is rejected stays
+	// model-scoped, whether or not the umbrella unified status also reads "rejected".
+	if status7dOI == "rejected" {
 		return false
 	}
-	status7dOI := strings.ToLower(strings.TrimSpace(getHeaderCaseInsensitive(headers, "Anthropic-Ratelimit-Unified-7d_oi-Status")))
-	return !isFableOnlyRejection(status5h, status7d, status7dOI)
+	// Unified rejection with no window header explaining it cannot be attributed to a
+	// specific model, so treat it as credential-scoped.
+	return unifiedStatus == "rejected"
 }
 
 func isClaudeWindowAllowed(status string) bool {

@@ -305,3 +305,72 @@ func TestClaudeHeadersIndicateUnifiedRateLimitRejection_AllowedWarning(t *testin
 		})
 	}
 }
+
+// TestClaudeHeadersIndicateUnifiedRateLimitRejection_FableOnly covers the credential-scope
+// escalation rules for Fable (7d_oi) rejections: a Fable-only rejection must stay
+// model-scoped even when the shared windows are omitted rather than explicitly "allowed".
+func TestClaudeHeadersIndicateUnifiedRateLimitRejection_FableOnly(t *testing.T) {
+	cases := []struct {
+		name    string
+		headers map[string]string
+		want    bool
+	}{
+		{
+			name: "fable only, shared windows explicitly allowed",
+			headers: map[string]string{
+				"Anthropic-Ratelimit-Unified-Status":       "rejected",
+				"Anthropic-Ratelimit-Unified-5h-Status":    "allowed",
+				"Anthropic-Ratelimit-Unified-7d-Status":    "allowed",
+				"Anthropic-Ratelimit-Unified-7d_oi-Status": "rejected",
+			},
+			want: false,
+		},
+		{
+			name: "fable only, shared windows omitted",
+			headers: map[string]string{
+				"Anthropic-Ratelimit-Unified-Status":       "rejected",
+				"Anthropic-Ratelimit-Unified-7d_oi-Status": "rejected",
+			},
+			want: false,
+		},
+		{
+			name: "fable rejected, unified absent, shared absent",
+			headers: map[string]string{
+				"Anthropic-Ratelimit-Unified-7d_oi-Status": "rejected",
+			},
+			want: false,
+		},
+		{
+			name: "unified rejected without any window status",
+			headers: map[string]string{
+				"Anthropic-Ratelimit-Unified-Status": "rejected",
+			},
+			want: true,
+		},
+		{
+			name: "5h explicitly rejected escalates",
+			headers: map[string]string{
+				"Anthropic-Ratelimit-Unified-5h-Status": "rejected",
+			},
+			want: true,
+		},
+		{
+			name: "7d explicitly rejected escalates",
+			headers: map[string]string{
+				"Anthropic-Ratelimit-Unified-7d-Status": "rejected",
+			},
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := make(http.Header)
+			for k, v := range tc.headers {
+				h.Set(k, v)
+			}
+			if got := ClaudeHeadersIndicateUnifiedRateLimitRejection(h); got != tc.want {
+				t.Fatalf("ClaudeHeadersIndicateUnifiedRateLimitRejection() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
