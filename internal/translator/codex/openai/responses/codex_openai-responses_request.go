@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
+	sigcompat "github.com/router-for-me/CLIProxyAPI/v7/internal/signature"
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/common"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -25,6 +26,7 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON = setCodexRequiredBool(rawJSON, "store", false)
 	rawJSON = setCodexRequiredBool(rawJSON, "parallel_tool_calls", true)
 	rawJSON = setCodexRequiredInclude(rawJSON)
+	rawJSON = dropForeignReasoningReplayForGPTTarget(rawJSON)
 	// Codex Responses rejects token limit fields, so strip them out before forwarding.
 	rawJSON = deleteCodexRequestFields(rawJSON, "max_output_tokens", "max_completion_tokens", "temperature", "top_p")
 	if serviceTier := gjson.GetBytes(rawJSON, "service_tier"); serviceTier.Exists() && serviceTier.String() != "priority" {
@@ -213,7 +215,7 @@ func convertSystemRoleToDeveloperWithInput(rawJSON []byte, inputResult gjson.Res
 	}
 
 	changed := false
-	rebuiltInput := make([]json.RawMessage, 0, len(inputItems))
+	rebuiltInput := make([][]byte, 0, len(inputItems))
 	for _, item := range inputItems {
 		itemRaw := []byte(item.Raw)
 		if item.IsObject() && item.Get("role").String() == "system" {
@@ -230,11 +232,7 @@ func convertSystemRoleToDeveloperWithInput(rawJSON []byte, inputResult gjson.Res
 		return rawJSON
 	}
 
-	inputRaw, errMarshalInput := json.Marshal(rebuiltInput)
-	if errMarshalInput != nil {
-		return rawJSON
-	}
-	updated, errSetInput := sjson.SetRawBytes(rawJSON, "input", inputRaw)
+	updated, errSetInput := sjson.SetRawBytes(rawJSON, "input", translatorcommon.JoinRawArray(rebuiltInput))
 	if errSetInput != nil {
 		return rawJSON
 	}
@@ -296,6 +294,60 @@ func normalizeCodexBuiltinToolAtPath(rawJSON []byte, path string) []byte {
 	}
 
 	log.Debugf("codex responses: normalized builtin tool type at %s from %q to %q", path, currentType, normalizedType)
+	return updated
+}
+
+// dropForeignReasoningReplayForGPTTarget removes reasoning input items whose
+// encrypted_content provably belongs to a foreign provider family before the body
+// reaches an OpenAI Responses upstream. Codex clients replay rollout history on
+// every turn, so reasoning items minted on another model family (for example
+// Claude CAIS blobs written while the thread ran on claude-opus-5) arrive here
+// inside input[] and hard-fail upstream with invalid_encrypted_content. The
+// failure repeats forever because the poisoned items stay in client history.
+//
+// Precedent: #3961 added the same keep-or-drop gate for the xAI Grok target. This
+// is the GPT-target counterpart.
+//
+// Conservative drop set: only envelope-verified families (Claude CAIS or strict
+// thinking envelope, recognized Gemini provider signature). Size- or shape-only
+// classifiers (Kimi fixed-size), the Gemini bypass literal, and Unknown never
+// justify dropping here, unlike the Grok path: a false positive would silently
+// discard NATIVE GPT replay state, which is this filter's own failure mode run in
+// reverse. Native OpenAI blobs are opaque to every classifier by design, so
+// anything not provably foreign stays.
+func dropForeignReasoningReplayForGPTTarget(rawJSON []byte) []byte {
+	input := gjson.GetBytes(rawJSON, "input")
+	if !input.IsArray() {
+		return rawJSON
+	}
+	inputItems := input.Array()
+	changed := false
+	rebuiltInput := make([][]byte, 0, len(inputItems))
+	for _, item := range inputItems {
+		if item.IsObject() && item.Get("type").String() == "reasoning" {
+			blob := item.Get("encrypted_content")
+			if blob.Exists() && blob.Type == gjson.String && blob.String() != "" {
+				switch sigcompat.DetectSignatureProviderForBlock(blob.String(), sigcompat.SignatureBlockKindGPTReasoning) {
+				case sigcompat.SignatureProviderClaude, sigcompat.SignatureProviderGemini:
+					changed = true
+					continue
+				default:
+					// GPT, Kimi, GeminiBypass, Unknown: keep.
+				}
+			}
+		}
+		rebuiltInput = append(rebuiltInput, []byte(item.Raw))
+	}
+	if !changed {
+		return rawJSON
+	}
+	updated, errSetInput := sjson.SetRawBytes(rawJSON, "input", translatorcommon.JoinRawArray(rebuiltInput))
+	if errSetInput != nil {
+		return rawJSON
+	}
+	if log.IsLevelEnabled(log.DebugLevel) {
+		log.WithField("dropped", len(inputItems)-len(rebuiltInput)).Debug("dropped foreign reasoning replay items for GPT target")
+	}
 	return updated
 }
 
