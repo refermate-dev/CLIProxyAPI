@@ -278,8 +278,8 @@ func verifyAccountedHomeConcurrencyIdentity(tuple homeConcurrencyTuple, auth *Au
 	return nil
 }
 
-// SafeResponseHeaders returns trusted response headers only for concrete
-// retry/cooldown errors.
+// SafeResponseHeaders returns headers safely derived from concrete Home retry
+// errors or typed 429 retry metadata without trusting arbitrary upstream values.
 func SafeResponseHeaders(err error) http.Header {
 	// An exhausted Home round owns the aggregated multi-credential deadline;
 	// a per-attempt trusted annotation deeper in the chain must not replace it.
@@ -322,7 +322,24 @@ func SafeResponseHeaders(err error) http.Header {
 			return http.Header{"Retry-After": []string{value}}
 		}
 	}
-	return nil
+
+	type statusProvider interface {
+		StatusCode() int
+	}
+	type retryAfterProvider interface {
+		RetryAfter() *time.Duration
+	}
+	var status statusProvider
+	var retry retryAfterProvider
+	if !errors.As(err, &status) || status == nil || status.StatusCode() != http.StatusTooManyRequests ||
+		!errors.As(err, &retry) || retry == nil {
+		return nil
+	}
+	retryAfter := retry.RetryAfter()
+	if retryAfter == nil {
+		return nil
+	}
+	return safeRetryAfterHeader(*retryAfter)
 }
 
 func safeRetryAfterHeader(retryAfter time.Duration) http.Header {
