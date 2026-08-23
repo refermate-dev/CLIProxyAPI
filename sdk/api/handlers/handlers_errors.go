@@ -35,6 +35,13 @@ func isAuthSelectionUnavailable(err error) bool {
 	return code == "auth_not_found" || code == "auth_unavailable"
 }
 
+func shouldPreserveBootstrapError(originalStatus int, retryErr error) bool {
+	if originalStatus == http.StatusTooManyRequests {
+		return statusFromError(retryErr) == http.StatusTooManyRequests || isAuthSelectionUnavailable(retryErr)
+	}
+	return originalStatus >= http.StatusInternalServerError && isAuthSelectionUnavailable(retryErr)
+}
+
 func enrichAuthSelectionError(err error, providers []string, model string) error {
 	if err == nil {
 		return nil
