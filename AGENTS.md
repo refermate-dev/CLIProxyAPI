@@ -67,3 +67,21 @@ Issues are tracked in the `Refermate` Linear workspace under team `RFM`. See `do
 ### Domain docs
 
 This repo uses a single-context domain-doc layout. See `docs/agents/domain.md`.
+
+## Local deployment on this Mac (branch `local-patches`)
+
+`~/.local/bin/cli-proxy-api` is built from this branch and run by the
+LaunchAgent `com.refermate.cliproxyapi`. **Never `cp` a new build over that path.**
+launchd pins the adhoc-signed binary's content hash at load; a replaced file
+gets SIGKILLed on every relaunch (`OS_REASON_CODESIGNING`, exit -9) and the
+whole Codex/T3 chain returns `502 Provider unreachable` from port 10100.
+
+Deploy with the script in the opencodex repo, which signs with the Apple
+Development identity, boots the agent out and back in, verifies 8317, and
+rolls back on failure:
+
+    go build -o ~/cli-proxy-api/build/cli-proxy-api-<tag> ./cmd/server
+    codex-cliproxy-deploy ~/cli-proxy-api/build/cli-proxy-api-<tag>
+
+If it ever happens anyway, `com.refermate.codex-chain` re-bootstraps
+the agent within 60s. Full write-up: `~/opencodex/LESSONS.md`.
