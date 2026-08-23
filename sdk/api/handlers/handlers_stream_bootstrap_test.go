@@ -29,6 +29,51 @@ type failOnceStreamExecutor struct {
 	calls int
 }
 
+type bootstrapRateLimitError struct {
+	message    string
+	retryAfter time.Duration
+}
+
+func (e bootstrapRateLimitError) Error() string              { return e.message }
+func (e bootstrapRateLimitError) StatusCode() int            { return http.StatusTooManyRequests }
+func (e bootstrapRateLimitError) RetryAfter() *time.Duration { return &e.retryAfter }
+
+type rateLimitedStreamExecutor struct {
+	calls atomic.Int32
+}
+
+func (e *rateLimitedStreamExecutor) Identifier() string { return "claude" }
+
+func (e *rateLimitedStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "Execute not implemented"}
+}
+
+func (e *rateLimitedStreamExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	e.calls.Add(1)
+	chunks := make(chan coreexecutor.StreamChunk, 1)
+	chunks <- coreexecutor.StreamChunk{Err: bootstrapRateLimitError{
+		message:    `{"type":"error","error":{"type":"rate_limit_error","message":"5-hour limit exceeded."}}`,
+		retryAfter: 32 * time.Minute,
+	}}
+	close(chunks)
+	return &coreexecutor.StreamResult{
+		Headers: http.Header{"Retry-After": {"1920"}},
+		Chunks:  chunks,
+	}, nil
+}
+
+func (e *rateLimitedStreamExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e *rateLimitedStreamExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "CountTokens not implemented"}
+}
+
+func (e *rateLimitedStreamExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
+	return nil, &coreauth.Error{Code: "not_implemented", Message: "HttpRequest not implemented", HTTPStatus: http.StatusNotImplemented}
+}
+
 func (e *failOnceStreamExecutor) Identifier() string { return "codex" }
 
 func (e *failOnceStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
@@ -1042,6 +1087,56 @@ func TestExecuteStreamWithAuthManager_ForwardsOverloadErrorWhenAllAuthsOverloade
 	}
 	if !strings.Contains(gotErr2.Error.Error(), "Our servers are currently overloaded. Please try again later.") && !strings.Contains(gotErr2.Error.Error(), "server_is_overloaded") {
 		t.Fatalf("expected reconnect error message to contain overload details, got: %q", gotErr2.Error.Error())
+	}
+}
+
+func TestExecuteStreamWithAuthManager_PreservesBootstrapRateLimitWhenRetryHasNoAuth(t *testing.T) {
+	executor := &rateLimitedStreamExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+
+	auth := &coreauth.Auth{
+		ID:       "claude-auth",
+		Provider: "claude",
+		Status:   coreauth.StatusActive,
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("manager.Register(auth): %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "claude-opus-5"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+	})
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		Streaming: sdkconfig.StreamingConfig{BootstrapRetries: 1},
+	}, manager)
+	dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "openai", "claude-opus-5", []byte(`{"model":"claude-opus-5"}`), "")
+	for range dataChan {
+		t.Fatal("rate-limited stream produced data")
+	}
+
+	var gotErr *interfaces.ErrorMessage
+	for msg := range errChan {
+		if msg != nil {
+			gotErr = msg
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected terminal error")
+	}
+	if gotErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", gotErr.StatusCode, http.StatusTooManyRequests)
+	}
+	wantBody := `{"type":"error","error":{"type":"rate_limit_error","message":"5-hour limit exceeded."}}`
+	if got := gotErr.Error.Error(); got != wantBody {
+		t.Fatalf("error = %q, want %q", got, wantBody)
+	}
+	if got := coreauth.SafeResponseHeaders(gotErr.Error).Get("Retry-After"); got != "1920" {
+		t.Fatalf("Retry-After = %q, want %q", got, "1920")
+	}
+	if got := executor.calls.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1", got)
 	}
 }
 

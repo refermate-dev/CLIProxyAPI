@@ -459,6 +459,27 @@ func TestHomeBusyErrorHeadersRoundUpMilliseconds(t *testing.T) {
 	}
 }
 
+type safeRateLimitError struct {
+	status     int
+	retryAfter time.Duration
+}
+
+func (e safeRateLimitError) Error() string              { return "rate limited" }
+func (e safeRateLimitError) StatusCode() int            { return e.status }
+func (e safeRateLimitError) RetryAfter() *time.Duration { return &e.retryAfter }
+
+func TestSafeResponseHeadersDerivesRetryAfterForTypedRateLimit(t *testing.T) {
+	errRateLimit := safeRateLimitError{status: http.StatusTooManyRequests, retryAfter: 1500 * time.Millisecond}
+	if got := SafeResponseHeaders(errRateLimit).Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After = %q, want 2", got)
+	}
+
+	errServer := safeRateLimitError{status: http.StatusServiceUnavailable, retryAfter: time.Minute}
+	if got := SafeResponseHeaders(errServer); got != nil {
+		t.Fatalf("server error headers = %#v, want nil", got)
+	}
+}
+
 func TestInstallHomeConcurrencyScopeRejectsNonCanonicalTuple(t *testing.T) {
 	registry := executionregistry.New()
 	pending, errBegin := registry.BeginDispatch()
