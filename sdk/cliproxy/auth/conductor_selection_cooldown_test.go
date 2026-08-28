@@ -813,3 +813,196 @@ func TestErrorWithCause_ErrorDirectFormat(t *testing.T) {
 		t.Fatalf("Error() = %q, want containing upstream error summary", got)
 	}
 }
+
+func TestAvailableAuthsForSelector_PrefixedSiblingCooldownRemainsSelectable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	next := now.Add(time.Hour)
+	auth := &Auth{
+		ID:             "claude-auth",
+		Provider:       "claude",
+		Prefix:         "developer",
+		Unavailable:    true,
+		NextRetryAfter: next,
+		Quota: QuotaState{
+			Exceeded:      true,
+			Reason:        "quota",
+			NextRecoverAt: next,
+		},
+		ModelStates: map[string]*ModelState{
+			"claude-fable-5": {
+				Status:         StatusError,
+				Unavailable:    true,
+				NextRetryAfter: next,
+				Quota: QuotaState{
+					Exceeded:      true,
+					Reason:        "quota",
+					NextRecoverAt: next,
+				},
+			},
+		},
+	}
+	manager := NewManager(nil, nil, nil)
+
+	selectors := map[string]Selector{
+		"round-robin":          &RoundRobinSelector{},
+		"weighted-round-robin": &WeightedRoundRobinSelector{},
+		"fill-first":           &FillFirstSelector{},
+	}
+	for name, selector := range selectors {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, selectorAuths, errAvailable := manager.availableAuthsForSelector(
+				selector,
+				[]*Auth{auth},
+				"claude",
+				"developer/claude-opus-5",
+				now,
+			)
+			if errAvailable != nil {
+				t.Fatalf("availableAuthsForSelector() error = %v", errAvailable)
+			}
+			selected, errPick := selector.Pick(
+				context.Background(),
+				"claude",
+				selectionArgForSelector(selector, "developer/claude-opus-5"),
+				cliproxyexecutor.Options{},
+				selectorAuths,
+			)
+			if errPick != nil {
+				t.Fatalf("Pick() error = %v", errPick)
+			}
+			if selected == nil || selected.ID != auth.ID {
+				t.Fatalf("Pick() auth = %+v, want %q", selected, auth.ID)
+			}
+		})
+	}
+}
+
+func TestSelectAuth_PrefixedSiblingCooldownReturnsCurrentAuthState(t *testing.T) {
+	now := time.Now()
+	next := now.Add(time.Hour)
+	selectors := map[string]Selector{
+		"round-robin":          &RoundRobinSelector{},
+		"weighted-round-robin": &WeightedRoundRobinSelector{},
+		"fill-first":           &FillFirstSelector{},
+	}
+	for name, selector := range selectors {
+		t.Run(name, func(t *testing.T) {
+			authID := "claude-auth-" + name
+			auth := &Auth{
+				ID:             authID,
+				Provider:       "claude",
+				Prefix:         "developer",
+				Status:         StatusError,
+				StatusMessage:  "Fable quota exhausted",
+				Unavailable:    true,
+				NextRetryAfter: next,
+				LastError:      &Error{Code: "rate_limit", Message: "Fable quota exhausted", HTTPStatus: 429},
+				Quota: QuotaState{
+					Exceeded:      true,
+					Reason:        "quota",
+					NextRecoverAt: next,
+				},
+				ModelStates: map[string]*ModelState{
+					"claude-fable-5": {
+						Status:         StatusError,
+						StatusMessage:  "Fable quota exhausted",
+						Unavailable:    true,
+						NextRetryAfter: next,
+						LastError:      &Error{Code: "rate_limit", Message: "Fable quota exhausted", HTTPStatus: 429},
+						Quota: QuotaState{
+							Exceeded:      true,
+							Reason:        "quota",
+							NextRecoverAt: next,
+						},
+					},
+				},
+			}
+
+			manager := NewManager(nil, selector, nil)
+			manager.RegisterExecutor(schedulerProviderTestExecutor{provider: "claude"})
+			if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+				t.Fatalf("Register() error = %v", errRegister)
+			}
+			registryRef := registry.GetGlobalRegistry()
+			registryRef.RegisterClient(authID, "claude", []*registry.ModelInfo{{ID: "claude-fable-5"}, {ID: "claude-opus-5"}})
+			t.Cleanup(func() { registryRef.UnregisterClient(authID) })
+
+			selected, errSelect := manager.SelectAuth(context.Background(), "claude", "developer/claude-opus-5", cliproxyexecutor.Options{})
+			if errSelect != nil {
+				t.Fatalf("SelectAuth() error = %v", errSelect)
+			}
+			if selected.ID != authID {
+				t.Fatalf("SelectAuth() ID = %q, want %q", selected.ID, authID)
+			}
+			if !selected.Unavailable || !selected.Quota.Exceeded || selected.Quota.Reason != "quota" {
+				t.Fatalf("SelectAuth() aggregate state = unavailable:%v quota:%+v, want preserved Fable compatibility state", selected.Unavailable, selected.Quota)
+			}
+			mixedSelected, _, providerKey, errMixed := manager.pickNextMixedLegacy(
+				context.Background(),
+				[]string{"claude"},
+				"developer/claude-opus-5",
+				cliproxyexecutor.Options{},
+				nil,
+			)
+			if errMixed != nil {
+				t.Fatalf("pickNextMixedLegacy() error = %v", errMixed)
+			}
+			if providerKey != "claude" || mixedSelected.ID != authID {
+				t.Fatalf("pickNextMixedLegacy() = provider:%q auth:%+v, want claude/%s", providerKey, mixedSelected, authID)
+			}
+			if !mixedSelected.Unavailable || !mixedSelected.Quota.Exceeded || mixedSelected.Quota.Reason != "quota" {
+				t.Fatalf("pickNextMixedLegacy() aggregate state = unavailable:%v quota:%+v, want preserved Fable compatibility state", mixedSelected.Unavailable, mixedSelected.Quota)
+			}
+
+			current, ok := manager.GetByID(authID)
+			if !ok || current == nil {
+				t.Fatalf("GetByID(%q) missing", authID)
+			}
+			if !current.Unavailable || !current.Quota.Exceeded || current.Quota.Reason != "quota" {
+				t.Fatalf("stored aggregate state = unavailable:%v quota:%+v, want unchanged", current.Unavailable, current.Quota)
+			}
+		})
+	}
+}
+
+func TestSelectAuth_CredentialWideCooldownIsNotClearedForRouteModel(t *testing.T) {
+	next := time.Now().Add(time.Hour)
+	manager := NewManager(nil, &FillFirstSelector{}, nil)
+	manager.RegisterExecutor(schedulerProviderTestExecutor{provider: "claude"})
+
+	blocked := &Auth{
+		ID:             "a-credential-blocked",
+		Provider:       "claude",
+		Unavailable:    true,
+		NextRetryAfter: next,
+		Quota: QuotaState{
+			Exceeded:      true,
+			Reason:        "credential_quota",
+			NextRecoverAt: next,
+		},
+		ModelStates: map[string]*ModelState{
+			"claude-fable-5": {Status: StatusActive},
+		},
+	}
+	healthy := &Auth{ID: "b-healthy", Provider: "claude"}
+	for _, auth := range []*Auth{blocked, healthy} {
+		if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+			t.Fatalf("Register(%s) error = %v", auth.ID, errRegister)
+		}
+		registry.GetGlobalRegistry().RegisterClient(auth.ID, "claude", []*registry.ModelInfo{{ID: "claude-fable-5"}, {ID: "claude-opus-5"}})
+		authID := auth.ID
+		t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(authID) })
+	}
+
+	selected, errSelect := manager.SelectAuth(context.Background(), "claude", "claude-opus-5", cliproxyexecutor.Options{})
+	if errSelect != nil {
+		t.Fatalf("SelectAuth() error = %v", errSelect)
+	}
+	if selected.ID != healthy.ID {
+		t.Fatalf("SelectAuth() ID = %q, want healthy auth %q", selected.ID, healthy.ID)
+	}
+}

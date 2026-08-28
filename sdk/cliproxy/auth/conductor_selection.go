@@ -511,6 +511,9 @@ func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, pr
 			return nil, nil, err
 		}
 		priorityAuths = cloneAuthSlice(priorityAuths)
+		if isBuiltInSelector(selector) {
+			clearPrefilteredAvailability(priorityAuths)
+		}
 		return priorityAuths, priorityAuths, nil
 	}
 
@@ -683,6 +686,52 @@ func cloneAuthSlice(auths []*Auth) []*Auth {
 		out = append(out, auth.Clone())
 	}
 	return out
+}
+
+func (m *Manager) cloneCurrentAuth(selected *Auth) (*Auth, error) {
+	if selected == nil {
+		return nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
+	}
+
+	m.mu.RLock()
+	current := m.auths[selected.ID]
+	if current == nil {
+		m.mu.RUnlock()
+		return nil, &Error{Code: "auth_not_found", Message: "selected auth is no longer registered"}
+	}
+	if current.indexAssigned {
+		authCopy := current.Clone()
+		m.mu.RUnlock()
+		return authCopy, nil
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current = m.auths[selected.ID]
+	if current == nil {
+		return nil, &Error{Code: "auth_not_found", Message: "selected auth is no longer registered"}
+	}
+	if !current.indexAssigned {
+		current.EnsureIndex()
+	}
+	return current.Clone(), nil
+}
+
+// clearPrefilteredAvailability removes aggregate cooldown fields from the
+// cloned view handed to built-in selectors. The route-aware availability pass
+// already proved each auth usable for the requested model; rechecking with the
+// selectors' intentionally empty model key would otherwise turn a sibling
+// model cooldown into a credential-wide block.
+func clearPrefilteredAvailability(auths []*Auth) {
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		auth.Unavailable = false
+		auth.NextRetryAfter = time.Time{}
+		applyCooldownFields(&auth.Quota, QuotaState{})
+	}
 }
 
 func schedulerAuthCandidates(auths []*Auth) []pluginapi.SchedulerAuthCandidate {
@@ -1544,14 +1593,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	if selected == nil {
 		return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
-	authCopy := selected.Clone()
-	if !selected.indexAssigned {
-		m.mu.Lock()
-		if current := m.auths[authCopy.ID]; current != nil && !current.indexAssigned {
-			current.EnsureIndex()
-			authCopy = current.Clone()
-		}
-		m.mu.Unlock()
+	authCopy, errClone := m.cloneCurrentAuth(selected)
+	if errClone != nil {
+		return nil, nil, errClone
 	}
 	return authCopy, executor, nil
 }
@@ -1769,14 +1813,9 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 	if selected == nil {
 		return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
-	authCopy := selected.Clone()
-	if !selected.indexAssigned {
-		m.mu.Lock()
-		if current := m.auths[authCopy.ID]; current != nil && !current.indexAssigned {
-			current.EnsureIndex()
-			authCopy = current.Clone()
-		}
-		m.mu.Unlock()
+	authCopy, errClone := m.cloneCurrentAuth(selected)
+	if errClone != nil {
+		return nil, nil, errClone
 	}
 	return authCopy, executor, nil
 }
@@ -1882,14 +1921,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	if !okExecutor {
 		return nil, nil, "", &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
-	authCopy := selected.Clone()
-	if !selected.indexAssigned {
-		m.mu.Lock()
-		if current := m.auths[authCopy.ID]; current != nil && !current.indexAssigned {
-			current.EnsureIndex()
-			authCopy = current.Clone()
-		}
-		m.mu.Unlock()
+	authCopy, errClone := m.cloneCurrentAuth(selected)
+	if errClone != nil {
+		return nil, nil, "", errClone
 	}
 	return authCopy, executor, providerKey, nil
 }
@@ -1969,14 +2003,9 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 	if !okExecutor {
 		return nil, nil, "", &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
-	authCopy := selected.Clone()
-	if !selected.indexAssigned {
-		m.mu.Lock()
-		if current := m.auths[authCopy.ID]; current != nil && !current.indexAssigned {
-			current.EnsureIndex()
-			authCopy = current.Clone()
-		}
-		m.mu.Unlock()
+	authCopy, errClone := m.cloneCurrentAuth(selected)
+	if errClone != nil {
+		return nil, nil, "", errClone
 	}
 	return authCopy, executor, providerKey, nil
 }

@@ -66,6 +66,94 @@ func TestClassifyClaudeUpstreamError_FableOnlyAllowedWarningIsModelScoped(t *tes
 	}
 }
 
+func TestClassifyClaudeUpstreamErrorForModel_AmbiguousFableRejectionIsModelScoped(t *testing.T) {
+	headers := http.Header{
+		"Anthropic-Ratelimit-Unified-Status": []string{"rejected"},
+	}
+	body := []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`)
+
+	fableErr := classifyClaudeUpstreamErrorForModel("claude-fable-5", http.StatusTooManyRequests, headers, body)
+	var fableScoped interface{ IsCredentialScoped() bool }
+	if !errors.As(fableErr, &fableScoped) || fableScoped == nil {
+		t.Fatalf("expected %T to expose credential scope", fableErr)
+	}
+	if fableScoped.IsCredentialScoped() {
+		t.Fatal("ambiguous Fable rejection was credential-scoped; want model-scoped")
+	}
+
+	opusErr := classifyClaudeUpstreamErrorForModel("claude-opus-5", http.StatusTooManyRequests, headers, body)
+	var opusScoped interface{ IsCredentialScoped() bool }
+	if !errors.As(opusErr, &opusScoped) || opusScoped == nil {
+		t.Fatalf("expected %T to expose credential scope", opusErr)
+	}
+	if !opusScoped.IsCredentialScoped() {
+		t.Fatal("ambiguous non-Fable rejection was model-scoped; want credential-scoped")
+	}
+
+	sharedHeaders := headers.Clone()
+	sharedHeaders.Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
+	prefixedFableErr := classifyClaudeUpstreamErrorForModel("developer/claude-fable-5", http.StatusTooManyRequests, sharedHeaders, body)
+	var prefixedFableScoped interface{ IsCredentialScoped() bool }
+	if !errors.As(prefixedFableErr, &prefixedFableScoped) || prefixedFableScoped == nil {
+		t.Fatalf("expected %T to expose credential scope", prefixedFableErr)
+	}
+	if prefixedFableScoped.IsCredentialScoped() {
+		t.Fatal("prefixed Fable rejection with shared-window headers was credential-scoped; want model-scoped")
+	}
+
+	sharedOpusErr := classifyClaudeUpstreamErrorForModel("developer/claude-opus-5", http.StatusTooManyRequests, sharedHeaders, body)
+	var sharedOpusScoped interface{ IsCredentialScoped() bool }
+	if !errors.As(sharedOpusErr, &sharedOpusScoped) || sharedOpusScoped == nil {
+		t.Fatalf("expected %T to expose credential scope", sharedOpusErr)
+	}
+	if !sharedOpusScoped.IsCredentialScoped() {
+		t.Fatal("prefixed Opus rejection with shared-window headers was model-scoped; want credential-scoped")
+	}
+}
+
+func TestClassifyClaudeUpstreamErrorForModel_FableFastModeCreditsRemainRequestScoped(t *testing.T) {
+	headers := http.Header{
+		"Anthropic-Ratelimit-Unified-Status":    []string{"rejected"},
+		"Anthropic-Ratelimit-Unified-5h-Status": []string{"rejected"},
+		"Retry-After":                           []string{"120"},
+	}
+	body := []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for fast mode."}}`)
+
+	err := classifyClaudeUpstreamErrorForModel("developer/claude-fable-5", http.StatusTooManyRequests, headers, body)
+	scoped, ok := err.(cliproxyexecutor.RequestScopedError)
+	if !ok || !scoped.IsRequestScoped() {
+		t.Fatalf("Fable fast-mode credit refusal = %T, want request-scoped", err)
+	}
+	var credentialScoped interface{ IsCredentialScoped() bool }
+	if !errors.As(err, &credentialScoped) || credentialScoped.IsCredentialScoped() {
+		t.Fatalf("Fable fast-mode credit refusal = %T, want credential scope false", err)
+	}
+}
+
+func TestNewClaudeFastDirectResponseError_FableRejectionIsModelScoped(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header: http.Header{
+			"Anthropic-Ratelimit-Unified-Status":    []string{"rejected"},
+			"Anthropic-Ratelimit-Unified-5h-Status": []string{"rejected"},
+			"Retry-After":                           []string{"120"},
+		},
+	}
+
+	err := newClaudeFastDirectResponseError("developer/claude-fable-5", resp, []byte(`{"type":"error"}`))
+	var scoped interface{ IsCredentialScoped() bool }
+	if !errors.As(err, &scoped) || scoped.IsCredentialScoped() {
+		t.Fatalf("Fable fast direct response = %T, want credential scope false", err)
+	}
+	var retry retryAfterProvider
+	if !errors.As(err, &retry) || retry.RetryAfter() == nil {
+		t.Fatalf("Fable fast direct response = %T, want Retry-After", err)
+	}
+	if got := *retry.RetryAfter(); got < 2*time.Minute || got > 2*time.Minute+30*time.Second {
+		t.Fatalf("RetryAfter = %v, want ~120s with fuzz", got)
+	}
+}
+
 func TestClassifyClaudeUpstreamError_SharedOrAmbiguousRejectionRemainsCredentialScoped(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -158,7 +246,7 @@ func TestClassifyClaudeUpstreamError_FableRetryDuration(t *testing.T) {
 	})
 }
 
-func TestClaudeExecutor_AuthManager_FableOnlyRejectionDoesNotBlockOpus(t *testing.T) {
+func TestClaudeExecutor_AuthManager_AmbiguousFableRejectionDoesNotBlockOpus(t *testing.T) {
 	var fableAttempts, opusAttempts atomic.Int32
 	reset := time.Now().Add(7 * 24 * time.Hour).Unix()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,13 +260,12 @@ func TestClaudeExecutor_AuthManager_FableOnlyRejectionDoesNotBlockOpus(t *testin
 			fableAttempts.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Anthropic-Ratelimit-Unified-Status", "rejected")
-			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "allowed")
-			w.Header().Set("Anthropic-Ratelimit-Unified-7d-Status", "allowed")
-			w.Header().Set("Anthropic-Ratelimit-Unified-7d_oi-Status", "rejected")
-			w.Header().Set("Anthropic-Ratelimit-Unified-7d_oi-Reset", strconv.FormatInt(reset, 10))
+			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
+			w.Header().Set("Anthropic-Ratelimit-Unified-7d-Status", "rejected")
+			w.Header().Set("Anthropic-Ratelimit-Unified-Reset", strconv.FormatInt(reset, 10))
 			w.Header().Set("Retry-After", "120")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Fable usage window rejected."}}`))
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`))
 		case strings.Contains(string(body), `"model":"claude-opus-5"`):
 			opusAttempts.Add(1)
 			w.Header().Set("Content-Type", "application/json")
@@ -197,6 +284,7 @@ func TestClaudeExecutor_AuthManager_FableOnlyRejectionDoesNotBlockOpus(t *testin
 	auth := &cliproxyauth.Auth{
 		ID:       uuid.NewString() + "-fable-model-scope",
 		Provider: "claude",
+		Prefix:   "developer",
 		Attributes: map[string]string{
 			"api_key":  "sanitized-test-key",
 			"base_url": server.URL,
@@ -211,7 +299,7 @@ func TestClaudeExecutor_AuthManager_FableOnlyRejectionDoesNotBlockOpus(t *testin
 
 	payloadFable := []byte(`{"model":"claude-fable-5","messages":[{"role":"user","content":[{"type":"text","text":"test"}]}]}`)
 	_, errFable := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{
-		Model:   "claude-fable-5",
+		Model:   "developer/claude-fable-5",
 		Payload: payloadFable,
 	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
 	if errFable == nil {
@@ -236,7 +324,7 @@ func TestClaudeExecutor_AuthManager_FableOnlyRejectionDoesNotBlockOpus(t *testin
 
 	payloadOpus := []byte(`{"model":"claude-opus-5","messages":[{"role":"user","content":[{"type":"text","text":"test"}]}]}`)
 	_, errOpus := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{
-		Model:   "claude-opus-5",
+		Model:   "developer/claude-opus-5",
 		Payload: payloadOpus,
 	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
 	if errOpus != nil {

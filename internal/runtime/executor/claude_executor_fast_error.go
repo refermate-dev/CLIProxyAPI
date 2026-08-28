@@ -133,7 +133,7 @@ func wrapClaudeFastRequestError(fastRequest bool, status int, err error) error {
 	return &claudeFastRequestError{cause: err, status: status, retryAfter: retryAfter}
 }
 
-func newClaudeFastDirectResponseError(resp *http.Response, body []byte) error {
+func newClaudeFastDirectResponseError(model string, resp *http.Response, body []byte) error {
 	if resp == nil {
 		return nil
 	}
@@ -146,8 +146,13 @@ func newClaudeFastDirectResponseError(resp *http.Response, body []byte) error {
 	var retryAfter *time.Duration
 	credentialScoped := false
 	if resp.StatusCode == http.StatusTooManyRequests {
-		retryAfter = helps.ParseClaudeRateLimitReset(resp.Header, time.Now())
-		if helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(resp.Header) {
+		fableModel := isClaudeFableModel(model)
+		if fableModel {
+			retryAfter = helps.ParseClaudeModelRateLimitReset(resp.Header, time.Now())
+		} else {
+			retryAfter = helps.ParseClaudeRateLimitReset(resp.Header, time.Now())
+		}
+		if !fableModel && helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(resp.Header) {
 			credentialScoped = true
 		}
 	}

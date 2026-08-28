@@ -405,12 +405,30 @@ func (e claudeRateLimitError) IsRequestScoped() bool {
 // the whole Claude pool and cool down every credential, all of which remain
 // perfectly healthy for ordinary traffic. The refusal belongs to the request.
 func classifyClaudeUpstreamError(statusCode int, headers http.Header, body []byte) error {
+	return classifyClaudeUpstreamErrorForModel("", statusCode, headers, body)
+}
+
+func classifyClaudeUpstreamErrorForModel(model string, statusCode int, headers http.Header, body []byte) error {
+	fableModel := isClaudeFableModel(model)
 	var retryAfter *time.Duration
 	if statusCode == http.StatusTooManyRequests || (statusCode >= 400 && statusCode < 600) {
-		retryAfter = helps.ParseClaudeRateLimitReset(headers, time.Now())
+		if fableModel {
+			retryAfter = helps.ParseClaudeModelRateLimitReset(headers, time.Now())
+		} else {
+			retryAfter = helps.ParseClaudeRateLimitReset(headers, time.Now())
+		}
 	}
 	err := statusErr{code: statusCode, msg: string(body), retryAfter: retryAfter}
 	if statusCode == http.StatusTooManyRequests {
+		// Anthropic tracks Fable independently from the general Claude quota.
+		// Its 429 responses can still carry unified 5h/7d rejection headers, so
+		// those headers must not make the entire credential unavailable to Opus.
+		if fableModel {
+			if claudeBodyIndicatesFastModeCredits(body) {
+				return claudeEntitlementError{err}
+			}
+			return claudeRateLimitError{statusErr: err, credentialScoped: false}
+		}
 		if helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(headers) {
 			return claudeRateLimitError{statusErr: err, credentialScoped: true}
 		}
@@ -421,6 +439,14 @@ func classifyClaudeUpstreamError(statusCode int, headers http.Header, body []byt
 		return claudeRateLimitError{statusErr: err, credentialScoped: false}
 	}
 	return err
+}
+
+func isClaudeFableModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if separator := strings.LastIndex(model, "/"); separator >= 0 {
+		model = model[separator+1:]
+	}
+	return strings.HasPrefix(model, "claude-fable-")
 }
 
 // claudeBodyIndicatesFastModeCredits matches Anthropic's fast-mode entitlement

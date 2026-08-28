@@ -62,6 +62,19 @@ func ParseClaudeRateLimitReset(headers http.Header, now time.Time) *time.Duratio
 	return parseClaudeRateLimitResetWithFuzz(headers, now, defaultClaudeRateLimitFuzzMinSeconds, defaultClaudeRateLimitFuzzMaxSeconds)
 }
 
+// ParseClaudeModelRateLimitReset returns only request/model-level retry guidance.
+// It deliberately ignores Anthropic's unified and window-specific reset timestamps.
+func ParseClaudeModelRateLimitReset(headers http.Header, now time.Time) *time.Duration {
+	if headers == nil {
+		return nil
+	}
+	modelHeaders := make(http.Header)
+	if retryAfter := getHeaderCaseInsensitive(headers, "Retry-After"); retryAfter != "" {
+		modelHeaders.Set("Retry-After", retryAfter)
+	}
+	return parseClaudeRateLimitResetWithFuzz(modelHeaders, now, defaultClaudeRateLimitFuzzMinSeconds, defaultClaudeRateLimitFuzzMaxSeconds)
+}
+
 func parseClaudeRateLimitResetWithFuzz(headers http.Header, now time.Time, minFuzzSec, maxFuzzSec int) *time.Duration {
 	if headers == nil {
 		return nil
