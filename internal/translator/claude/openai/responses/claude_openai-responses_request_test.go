@@ -1295,24 +1295,27 @@ func TestConvertOpenAIResponsesRequestToClaude_DeduplicatesToolOutputs(t *testin
 		t.Fatalf("messages[3].content.1.id = %q, want toolu_parallel", got)
 	}
 
-	// Message 4: valid tool result first, followed by downgraded orphan outputs.
+	// Message 4: user tool_results: call_custom_dup (custom final), toolu_parallel (parallel result), and empty id output
 	msg4Blocks := messages[4].Get("content").Array()
 	if len(msg4Blocks) != 3 {
-		t.Fatalf("expected 3 blocks in message 4, got %d. Output: %s", len(msg4Blocks), string(out))
+		t.Fatalf("expected 3 tool_result blocks in message 4, got %d. Output: %s", len(msg4Blocks), string(out))
 	}
-	if got := msg4Blocks[0].Get("tool_use_id").String(); got != "toolu_parallel" {
-		t.Fatalf("msg4Blocks[0].tool_use_id = %q, want toolu_parallel", got)
+	if got := msg4Blocks[0].Get("tool_use_id").String(); got != "call_custom_dup" {
+		t.Fatalf("msg4Blocks[0].tool_use_id = %q, want call_custom_dup", got)
 	}
-	if got := msg4Blocks[0].Get("content").String(); got != "parallel result" {
-		t.Fatalf("msg4Blocks[0].content = %q, want 'parallel result'", got)
-	}
-
-	if got := msg4Blocks[1].Get("text").String(); got != "custom final" {
-		t.Fatalf("msg4Blocks[1].text = %q, want 'custom final'", got)
+	if got := msg4Blocks[0].Get("content").String(); got != "custom final" {
+		t.Fatalf("msg4Blocks[0].content = %q, want 'custom final'", got)
 	}
 
-	if got := msg4Blocks[2].Get("text").String(); got != "empty id output" {
-		t.Fatalf("msg4Blocks[2].text = %q, want 'empty id output'", got)
+	if got := msg4Blocks[1].Get("tool_use_id").String(); got != "toolu_parallel" {
+		t.Fatalf("msg4Blocks[1].tool_use_id = %q, want toolu_parallel", got)
+	}
+	if got := msg4Blocks[1].Get("content").String(); got != "parallel result" {
+		t.Fatalf("msg4Blocks[1].content = %q, want 'parallel result'", got)
+	}
+
+	if got := msg4Blocks[2].Get("content").String(); got != "empty id output" {
+		t.Fatalf("msg4Blocks[2].content = %q, want 'empty id output'", got)
 	}
 }
 

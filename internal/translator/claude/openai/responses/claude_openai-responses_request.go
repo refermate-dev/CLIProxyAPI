@@ -28,8 +28,7 @@ const (
 //     top-level system blocks, in source order
 //   - input[].type==message with input_text/output_text -> user/assistant messages
 //   - function_call/custom_tool_call -> assistant tool_use
-//   - matched function_call_output/custom_tool_call_output -> user tool_result;
-//     orphan outputs -> ordinary user content
+//   - function_call_output/custom_tool_call_output -> user tool_result
 //   - top-level tools and input[].additional_tools -> Claude tools[].input_schema
 //   - max_output_tokens -> max_tokens
 //   - stream passthrough via parameter
@@ -267,14 +266,9 @@ func convertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 	}
 
 	lastToolResult := map[string]gjson.Result{}
-	responsesToolCallIDs := map[string]struct{}{}
 	if input := root.Get("input"); input.Exists() && input.IsArray() {
 		input.ForEach(func(_, item gjson.Result) bool {
 			switch item.Get("type").String() {
-			case "function_call", "custom_tool_call":
-				if rawID := item.Get("call_id").String(); rawID != "" {
-					responsesToolCallIDs[rawID] = struct{}{}
-				}
 			case "function_call_output", "custom_tool_call_output":
 				rawID := item.Get("call_id").String()
 				if rawID != "" {
@@ -460,6 +454,7 @@ func convertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 			case "function_call_output", "custom_tool_call_output":
 				// Map to user tool_result
 				rawID := item.Get("call_id").String()
+				callID := util.SanitizeClaudeToolID(rawID)
 				if rawID != "" {
 					if _, exists := emittedToolResults[rawID]; exists {
 						return true
@@ -472,10 +467,8 @@ func convertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 						output = lastItem.Get("output")
 					}
 				}
-				toolResult := []byte(`{"type":"tool_result","content":""}`)
-				if _, hasToolCall := responsesToolCallIDs[rawID]; rawID != "" && hasToolCall {
-					toolResult, _ = sjson.SetBytes(toolResult, "tool_use_id", util.SanitizeClaudeToolID(rawID))
-				}
+				toolResult := []byte(`{"type":"tool_result","tool_use_id":"","content":""}`)
+				toolResult, _ = sjson.SetBytes(toolResult, "tool_use_id", callID)
 				toolResult = applyResponsesToolResultContent(toolResult, output)
 
 				appendParts("user", toolResult)
@@ -523,13 +516,6 @@ func convertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 		// because that one can drop the whole last message.
 		messageBlocks = dropAmbiguousThinkingSets(messageBlocks)
 	}
-	// LOCAL PATCH 3 (remove when upstream repairs orphan Responses tool
-	// outputs): only keep tool_result blocks whose tool_use_id exists in the
-	// immediately preceding assistant message. Cross-task delegation arrives
-	// as function_call_output without a call_id, and stale replays can carry a
-	// non-empty ID with no adjacent call; both become ordinary user content
-	// instead of an invalid Claude transcript.
-	messageBlocks = downgradeOrphanClaudeToolResults(messageBlocks)
 	out = common.SetRawArrayItems(out, "messages", messageBlocks)
 	if len(systemBlocks) > 0 {
 		out, _ = sjson.SetRawBytes(out, "system", common.JoinRawArray(systemBlocks))
@@ -844,102 +830,6 @@ func applyResponsesToolResultContent(toolResult []byte, output gjson.Result) []b
 	}
 	toolResult, _ = sjson.SetBytes(toolResult, "content", output.String())
 	return toolResult
-}
-
-// downgradeOrphanClaudeToolResults enforces Anthropic's tool adjacency rule on
-// the final translated transcript. Every retained tool_result must reference a
-// tool_use in the immediately preceding assistant message. Unmatched result
-// content is preserved as ordinary user content; no tool call or result is
-// invented to repair malformed Responses history.
-func downgradeOrphanClaudeToolResults(messageBlocks [][]byte) [][]byte {
-	var previousToolUseIDs map[string]struct{}
-	for messageIndex := range messageBlocks {
-		message := gjson.ParseBytes(messageBlocks[messageIndex])
-		role := strings.ToLower(strings.TrimSpace(message.Get("role").String()))
-		if role == "user" {
-			content := message.Get("content")
-			if content.IsArray() {
-				parts := content.Array()
-				toolResults := make([][]byte, 0, len(parts))
-				ordinaryParts := make([][]byte, 0, len(parts))
-				changed := false
-				for _, part := range parts {
-					if part.Get("type").String() != "tool_result" {
-						ordinaryParts = append(ordinaryParts, []byte(part.Raw))
-						continue
-					}
-					toolUseID := strings.TrimSpace(part.Get("tool_use_id").String())
-					_, matched := previousToolUseIDs[toolUseID]
-					if toolUseID != "" && matched {
-						toolResults = append(toolResults, []byte(part.Raw))
-						continue
-					}
-					changed = true
-					ordinaryParts = append(ordinaryParts, orphanClaudeToolResultUserParts(part)...)
-				}
-				rebuilt := append(toolResults, ordinaryParts...)
-				if !changed && len(toolResults) > 0 && len(ordinaryParts) > 0 {
-					for index := 0; index < len(toolResults); index++ {
-						if parts[index].Get("type").String() != "tool_result" {
-							changed = true
-							break
-						}
-					}
-				}
-				if changed {
-					messageBlocks[messageIndex] = setClaudeMessageContentParts(messageBlocks[messageIndex], rebuilt)
-				}
-			}
-		}
-
-		previousToolUseIDs = nil
-		if role == "assistant" {
-			previousToolUseIDs = map[string]struct{}{}
-			message.Get("content").ForEach(func(_, part gjson.Result) bool {
-				if part.Get("type").String() == "tool_use" {
-					if toolUseID := strings.TrimSpace(part.Get("id").String()); toolUseID != "" {
-						previousToolUseIDs[toolUseID] = struct{}{}
-					}
-				}
-				return true
-			})
-		}
-	}
-	return messageBlocks
-}
-
-func orphanClaudeToolResultUserParts(toolResult gjson.Result) [][]byte {
-	content := toolResult.Get("content")
-	if content.IsArray() {
-		parts := make([][]byte, 0, len(content.Array()))
-		content.ForEach(func(_, part gjson.Result) bool {
-			parts = append(parts, []byte(part.Raw))
-			return true
-		})
-		if len(parts) > 0 {
-			return parts
-		}
-	}
-	textPart := []byte(`{"type":"text","text":""}`)
-	textPart, _ = sjson.SetBytes(textPart, "text", content.String())
-	return [][]byte{textPart}
-}
-
-func setClaudeMessageContentParts(message []byte, parts [][]byte) []byte {
-	if len(parts) == 1 {
-		part := gjson.ParseBytes(parts[0])
-		if part.Get("type").String() == "text" && !part.Get("cache_control").Exists() && !part.Get("citations").Exists() {
-			updated, errSet := sjson.SetBytes(message, "content", part.Get("text").String())
-			if errSet == nil {
-				return updated
-			}
-		}
-	}
-	updated, errSet := sjson.SetRawBytes(message, "content", common.JoinRawArray(parts))
-	if errSet != nil {
-		return message
-	}
-	return updated
 }
 
 func convertResponsesContentPartToClaude(part gjson.Result) []byte {
