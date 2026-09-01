@@ -2,6 +2,31 @@ package registry
 
 import "testing"
 
+func TestWithClaudeBuiltinsKeepsFable51AheadOfRemoteCatalog(t *testing.T) {
+	models := WithClaudeBuiltins([]*ModelInfo{
+		{ID: "claude-fable-5", DisplayName: "Claude Fable 5"},
+		{ID: claudeBuiltinFable51ModelID, DisplayName: "Stale Fable 5.1 metadata"},
+	})
+
+	var found *ModelInfo
+	count := 0
+	for _, model := range models {
+		if model != nil && model.ID == claudeBuiltinFable51ModelID {
+			found = model
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("Claude Fable 5.1 count = %d, want 1", count)
+	}
+	if found == nil || found.DisplayName != "Claude Fable 5.1" {
+		t.Fatalf("Claude Fable 5.1 built-in = %+v", found)
+	}
+	if found.Thinking == nil || !found.Thinking.DynamicAllowed {
+		t.Fatalf("Claude Fable 5.1 thinking = %+v, want adaptive thinking", found.Thinking)
+	}
+}
+
 func TestGetStaticModelDefinitionsByChannelSupportsGeminiInteractions(t *testing.T) {
 	models := GetStaticModelDefinitionsByChannel("gemini-interactions")
 	if len(models) == 0 {
