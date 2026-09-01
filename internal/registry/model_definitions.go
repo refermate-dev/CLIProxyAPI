@@ -8,6 +8,7 @@ import (
 
 const (
 	claudeBuiltinFable51ModelID   = "claude-fable-5-1"
+	claudeLegacyFable5ModelID     = "claude-fable-5"
 	codexBuiltinImage15ModelID    = "gpt-image-1.5"
 	codexBuiltinImageModelID      = "gpt-image-2"
 	xaiBuiltinImageModelID        = "grok-imagine-image"
@@ -116,7 +117,14 @@ func GetXAIModels() []*ModelInfo {
 // WithClaudeBuiltins injects newly released Claude model definitions that must
 // remain available while the remotely refreshed catalog catches up.
 func WithClaudeBuiltins(models []*ModelInfo) []*ModelInfo {
-	return upsertModelInfos(models, claudeBuiltinFable51ModelInfo())
+	filtered := make([]*ModelInfo, 0, len(models))
+	for _, model := range models {
+		if model == nil || strings.EqualFold(strings.TrimSpace(model.ID), claudeLegacyFable5ModelID) {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+	return upsertModelInfos(filtered, claudeBuiltinFable51ModelInfo())
 }
 
 // WithCodexBuiltins injects hard-coded Codex-only model definitions that should

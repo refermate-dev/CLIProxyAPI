@@ -61,7 +61,7 @@
 // by both envelopes: channel_id 16, no infra field 2, plus a block kind (field
 // 8) and a context id (field 11). Observed traffic confirms this schema
 // appears under the classic 0x12 envelope too (opus-4-6/4-7/4-8, sonnet-5) and
-// under the CAIS envelope (opus-5, fable-5), so envelope form and channel schema
+// under the CAIS envelope (Opus 5 and the Fable family), so envelope form and channel schema
 // generation vary independently and must not be inferred from each other:
 //
 //	Top-level protobuf
@@ -92,8 +92,8 @@
 // generation rather than on the provider:
 //
 //   - Claude Code OAuth subscription (Claude Code Max): opus-4-5, sonnet-4-6 and
-//     every later model up to opus-5 and fable-5. Emits the CAIS envelope for
-//     the newest models (opus-5, fable-5) and the single-layer E envelope for the
+//     every later model up to Opus 5 and the Fable family. Emits the CAIS envelope
+//     for the newest models and the single-layer E envelope for the
 //     opus-4-6/4-7/4-8 and sonnet-5 generation — but both carry the same
 //     channel_id 16 channel schema, so only the envelope differs.
 //   - Claude Messages API: the full Claude model range, same envelopes as the

@@ -163,7 +163,7 @@ func applySummaryConfigForProvider(body []byte, format, model, provider string, 
 	case "claude":
 		// Anthropic documents display as invalid with thinking.type=disabled and
 		// requires it alongside adaptive or enabled thinking. Model defaults differ:
-		// Opus 5 and Sonnet 5 default to adaptive thinking; Fable/Mythos 5 are always
+		// Opus 5 and Sonnet 5 default to adaptive thinking; Fable/Mythos 5.1 are always
 		// on. Opus 4.8/4.7/4.6, Sonnet 4.6, and the 4.5 models default to thinking
 		// off. The newest models also default display to omitted. Keeping a missing
 		// thinking block absent therefore preserves both kinds of model default;

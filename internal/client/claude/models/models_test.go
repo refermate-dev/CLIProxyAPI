@@ -18,7 +18,7 @@ func TestBuildResponse(t *testing.T) {
 
 	wantIDs := []string{
 		"claude-c",
-		"claude-fable-5-dd-o4-tpg",
+		"claude-fable-5-1-dd-o4-tpg",
 		"claude-b",
 		"claude-z",
 	}
@@ -97,10 +97,10 @@ func TestEnsureClaudeModelIDPrefix(t *testing.T) {
 	}{
 		{"empty", "", ""},
 		{"already has claude prefix", "claude-sonnet-4-6", "claude-sonnet-4-6"},
-		{"contains claude mid-string is reversed", "my-claude-custom", "claude-fable-5-dd-motsuc-edualc-ym"},
-		{"uppercase Claude prefix is reversed", "Claude-Opus-4", "claude-fable-5-dd-4-supO-edualC"},
-		{"gpt model is reversed", "gpt-4o", "claude-fable-5-dd-o4-tpg"},
-		{"gemini model is reversed", "gemini-2.5-pro", "claude-fable-5-dd-orp-5.2-inimeg"},
+		{"contains claude mid-string is reversed", "my-claude-custom", "claude-fable-5-1-dd-motsuc-edualc-ym"},
+		{"uppercase Claude prefix is reversed", "Claude-Opus-4", "claude-fable-5-1-dd-4-supO-edualC"},
+		{"gpt model is reversed", "gpt-4o", "claude-fable-5-1-dd-o4-tpg"},
+		{"gemini model is reversed", "gemini-2.5-pro", "claude-fable-5-1-dd-orp-5.2-inimeg"},
 	}
 
 	for _, tt := range tests {
@@ -121,10 +121,12 @@ func TestResolveClaudeModelIDPrefix(t *testing.T) {
 		{"empty", "", ""},
 		{"plain claude id unchanged", "claude-sonnet-4-6", "claude-sonnet-4-6"},
 		{"non encoded id unchanged", "gpt-4o", "gpt-4o"},
-		{"encoded gpt model", "claude-fable-5-dd-o4-tpg", "gpt-4o"},
-		{"encoded gemini model", "claude-fable-5-dd-orp-5.2-inimeg", "gemini-2.5-pro"},
-		{"empty encoded body unchanged", "claude-fable-5-dd-", "claude-fable-5-dd-"},
-		{"preserves thinking suffix", "claude-fable-5-dd-o4-tpg(high)", "gpt-4o(high)"},
+		{"encoded gpt model", "claude-fable-5-1-dd-o4-tpg", "gpt-4o"},
+		{"encoded gemini model", "claude-fable-5-1-dd-orp-5.2-inimeg", "gemini-2.5-pro"},
+		{"empty encoded body unchanged", "claude-fable-5-1-dd-", "claude-fable-5-1-dd-"},
+		{"preserves thinking suffix", "claude-fable-5-1-dd-o4-tpg(high)", "gpt-4o(high)"},
+		{"legacy encoded model remains routable", "claude-fable-5-dd-o4-tpg", "gpt-4o"},
+		{"legacy encoded model preserves thinking suffix", "claude-fable-5-dd-o4-tpg(high)", "gpt-4o(high)"},
 		{"round trip", EnsureClaudeModelIDPrefix("custom-model-x"), "custom-model-x"},
 	}
 

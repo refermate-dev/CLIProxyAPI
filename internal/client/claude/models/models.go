@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-const claudeDDModelPrefix = "claude-fable-5-dd-"
+const (
+	claudeDDModelPrefix       = "claude-fable-5-1-dd-"
+	legacyClaudeDDModelPrefix = "claude-fable-5-dd-"
+)
 
 // BuildResponse builds an Anthropic model response from available models.
 func BuildResponse(availableModels []map[string]any, disableCloaking bool) map[string]any {
@@ -46,7 +49,7 @@ func BuildResponse(availableModels []map[string]any, disableCloaking bool) map[s
 
 // EnsureClaudeModelIDPrefix rewrites model IDs for Anthropic model listings.
 // IDs that already start with "claude-" are returned unchanged; all other IDs
-// become "claude-fable-5-dd-" plus the original ID with its characters reversed.
+// become "claude-fable-5-1-dd-" plus the original ID with its characters reversed.
 func EnsureClaudeModelIDPrefix(id string) string {
 	if id == "" || strings.HasPrefix(id, "claude-") {
 		return id
@@ -61,10 +64,16 @@ func ResolveClaudeModelIDPrefix(id string) string {
 		return id
 	}
 	base, suffix, hasSuffix := splitModelThinkingSuffix(id)
-	if !strings.HasPrefix(base, claudeDDModelPrefix) {
+	prefix := ""
+	switch {
+	case strings.HasPrefix(base, claudeDDModelPrefix):
+		prefix = claudeDDModelPrefix
+	case strings.HasPrefix(base, legacyClaudeDDModelPrefix):
+		prefix = legacyClaudeDDModelPrefix
+	default:
 		return id
 	}
-	encoded := base[len(claudeDDModelPrefix):]
+	encoded := base[len(prefix):]
 	if encoded == "" {
 		return id
 	}

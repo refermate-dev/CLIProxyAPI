@@ -4,13 +4,21 @@ import "testing"
 
 func TestWithClaudeBuiltinsKeepsFable51AheadOfRemoteCatalog(t *testing.T) {
 	models := WithClaudeBuiltins([]*ModelInfo{
-		{ID: "claude-fable-5", DisplayName: "Claude Fable 5"},
+		{ID: claudeLegacyFable5ModelID, DisplayName: "Legacy Claude Fable"},
+		{ID: "claude-opus-5", DisplayName: "Claude Opus 5", ContextLength: 1000000},
 		{ID: claudeBuiltinFable51ModelID, DisplayName: "Stale Fable 5.1 metadata"},
 	})
 
 	var found *ModelInfo
+	var opus *ModelInfo
 	count := 0
 	for _, model := range models {
+		if model != nil && model.ID == claudeLegacyFable5ModelID {
+			t.Fatalf("legacy Claude Fable model remained in catalog: %+v", model)
+		}
+		if model != nil && model.ID == "claude-opus-5" {
+			opus = model
+		}
 		if model != nil && model.ID == claudeBuiltinFable51ModelID {
 			found = model
 			count++
@@ -24,6 +32,9 @@ func TestWithClaudeBuiltinsKeepsFable51AheadOfRemoteCatalog(t *testing.T) {
 	}
 	if found.Thinking == nil || !found.Thinking.DynamicAllowed {
 		t.Fatalf("Claude Fable 5.1 thinking = %+v, want adaptive thinking", found.Thinking)
+	}
+	if opus == nil || opus.DisplayName != "Claude Opus 5" || opus.ContextLength != 1000000 {
+		t.Fatalf("Claude Opus 5 changed while filtering legacy Fable: %+v", opus)
 	}
 }
 
