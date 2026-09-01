@@ -1474,7 +1474,9 @@ func isLocalAmbiguousThinkingPart(part gjson.Result) bool {
 }
 
 // dropAmbiguousThinkingSets removes every thinking block from an assistant
-// message that carries adjacent thinking blocks.
+// message that carries adjacent thinking blocks of the same type. A normal
+// thinking block next to redacted_thinking is a valid upstream-preserved
+// sequence and does not prove that response boundaries were lost.
 //
 // LOCAL PATCH 2 (remove when upstream fixes this). Anthropic requires the
 // thinking blocks it receives back to match the response that produced them,
@@ -1512,16 +1514,19 @@ func dropAmbiguousThinkingSets(messageBlocks [][]byte) [][]byte {
 		parts := content.Array()
 		thinkingCount := 0
 		hasAdjacentThinking := false
-		previousThinking := false
+		previousThinkingType := ""
 		for _, part := range parts {
 			isThinking := isLocalAmbiguousThinkingPart(part)
 			if isThinking {
 				thinkingCount++
-				if previousThinking {
+				partType := strings.TrimSpace(part.Get("type").String())
+				if previousThinkingType == partType {
 					hasAdjacentThinking = true
 				}
+				previousThinkingType = partType
+			} else {
+				previousThinkingType = ""
 			}
-			previousThinking = isThinking
 		}
 		if !hasAdjacentThinking {
 			continue
