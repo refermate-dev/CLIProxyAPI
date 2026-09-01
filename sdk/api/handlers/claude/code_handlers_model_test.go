@@ -89,6 +89,11 @@ func TestRewriteClaudeDDModelInBody(t *testing.T) {
 	}{
 		{
 			name:      "encoded model is decoded",
+			body:      `{"model":"claude-fable-5-1-dd-o4-tpg","messages":[]}`,
+			wantModel: "gpt-4o",
+		},
+		{
+			name:      "legacy encoded model is decoded",
 			body:      `{"model":"claude-fable-5-dd-o4-tpg","messages":[]}`,
 			wantModel: "gpt-4o",
 		},
@@ -99,7 +104,7 @@ func TestRewriteClaudeDDModelInBody(t *testing.T) {
 		},
 		{
 			name:      "encoded model with thinking suffix",
-			body:      `{"model":"claude-fable-5-dd-o4-tpg(high)","stream":true}`,
+			body:      `{"model":"claude-fable-5-1-dd-o4-tpg(high)","stream":true}`,
 			wantModel: "gpt-4o(high)",
 		},
 		{
