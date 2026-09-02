@@ -493,6 +493,21 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 		annotationKeys := make(map[string]struct{})
 		var contentRuneOffset int64
 
+		// A json_schema response_format promises the caller that
+		// message.content is exactly one JSON value. Codex can answer with
+		// several message items -- a reasoning model serialising a plan, one
+		// item per intended turn -- and chat completions has a single content
+		// string to put them in, unlike the Claude and Gemini translators
+		// which give each item its own block or part. Appending them produces
+		// {...}{...}{...}, which no JSON parser accepts: a strict client reads
+		// the first value, meets the brace that opens the second, and reports
+		// trailing characters. Clients then attribute that to the provider even
+		// though the upstream call returned 200, so keep the final item, which
+		// is the model's settled answer. Prose callers keep every item.
+		singleValueContent := gjson.GetBytes(
+			originalRequestRawJSON, "response_format.type",
+		).String() == "json_schema"
+
 		for _, outputItem := range outputArray {
 			outputType := outputItem.Get("type").String()
 
@@ -524,11 +539,19 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 			case "message":
 				// Extract message content and URL citations.
 				if contentResult := outputItem.Get("content"); contentResult.IsArray() {
+					replaceMessage := singleValueContent
 					for _, contentItem := range contentResult.Array() {
 						if contentItem.Get("type").String() != "output_text" {
 							continue
 						}
 						text := contentItem.Get("text").String()
+						if replaceMessage && text != "" {
+							contentText = ""
+							messageAnnotations = nil
+							contentRuneOffset = 0
+							clear(annotationKeys)
+							replaceMessage = false
+						}
 						contentText += text
 						messageAnnotations = append(messageAnnotations, buildCodexURLCitations(
 							codexAnnotationResults(contentItem.Get("annotations")),
