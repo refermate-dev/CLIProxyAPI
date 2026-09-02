@@ -637,3 +637,38 @@ func TestConvertCodexResponseToOpenAI_NonStreamReasoningSummaryAndContent(t *tes
 		t.Fatalf("expected reasoning_content %q, got %q; payload=%s", "Summary part and Content part", got.String(), string(out))
 	}
 }
+
+func TestConvertCodexResponseToOpenAINonStream_JSONSchemaKeepsOneJSONValue(t *testing.T) {
+	ctx := context.Background()
+	// Codex answering a strict structured request with several message items:
+	// the model serialising one object per intended turn. Appending them yields
+	// {...}{...}{...}, which fails to parse at the brace opening the second
+	// value, and clients report that as a provider error on a 200 response.
+	terminal := []byte(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.6-luna","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"step\":1}"}]},{"type":"message","content":[{"type":"output_text","text":"{\"step\":2}"}]},{"type":"message","content":[{"type":"output_text","text":"{\"step\":3}"}]}]}}`)
+
+	strictRequest := []byte(`{"model":"gpt-5.6-luna","response_format":{"type":"json_schema","json_schema":{"name":"Out","strict":true}}}`)
+	out := ConvertCodexResponseToOpenAINonStream(ctx, "gpt-5.6-luna", strictRequest, nil, terminal, nil)
+	content := gjson.GetBytes(out, "choices.0.message.content").String()
+	if !json.Valid([]byte(content)) {
+		t.Fatalf("structured content must be one parseable JSON value, got %q", content)
+	}
+	if content != `{"step":3}` {
+		t.Fatalf("structured content = %q, want the final message item", content)
+	}
+
+	// Prose callers still receive every item, unchanged.
+	proseRequest := []byte(`{"model":"gpt-5.6-luna"}`)
+	proseOut := ConvertCodexResponseToOpenAINonStream(ctx, "gpt-5.6-luna", proseRequest, nil, terminal, nil)
+	proseContent := gjson.GetBytes(proseOut, "choices.0.message.content").String()
+	if proseContent != `{"step":1}{"step":2}{"step":3}` {
+		t.Fatalf("prose content = %q, want every item concatenated", proseContent)
+	}
+
+	// A single message item is identical under both modes.
+	single := []byte(`{"type":"response.completed","response":{"id":"resp_2","model":"gpt-5.6-luna","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"only\":true}"}]}]}}`)
+	singleOut := ConvertCodexResponseToOpenAINonStream(ctx, "gpt-5.6-luna", strictRequest, nil, single, nil)
+	if got := gjson.GetBytes(singleOut, "choices.0.message.content").String(); got != `{"only":true}` {
+		t.Fatalf("single-item structured content = %q", got)
+	}
+}
+
