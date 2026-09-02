@@ -507,6 +507,7 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 		singleValueContent := gjson.GetBytes(
 			originalRequestRawJSON, "response_format.type",
 		).String() == "json_schema"
+		messageItems := 0
 
 		for _, outputItem := range outputArray {
 			outputType := outputItem.Get("type").String()
@@ -539,6 +540,7 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 			case "message":
 				// Extract message content and URL citations.
 				if contentResult := outputItem.Get("content"); contentResult.IsArray() {
+					messageItems++
 					replaceMessage := singleValueContent
 					for _, contentItem := range contentResult.Array() {
 						if contentItem.Get("type").String() != "output_text" {
@@ -602,6 +604,17 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 		}
 
 		// Set content and reasoning content if found
+		// Whether a model routinely answers a strict request with several
+		// message items decides whether dropping the earlier ones is a rare
+		// safeguard or a routine loss of work, and the collapsed content can no
+		// longer be counted downstream. Record it here, where the items still
+		// exist.
+		if singleValueContent && messageItems > 1 {
+			log.WithFields(log.Fields{
+				"messageItems": messageItems,
+				"model":        gjson.GetBytes(template, "model").String(),
+			}).Warn("codex chat-completions: strict json_schema response carried multiple message items; kept the final one")
+		}
 		if contentText != "" {
 			template, _ = sjson.SetBytes(template, "choices.0.message.content", contentText)
 		}
