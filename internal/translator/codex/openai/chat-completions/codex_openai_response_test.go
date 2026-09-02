@@ -1058,3 +1058,53 @@ func TestApplyPatchChatResponseOrdinaryFunctionPreference(t *testing.T) {
 		t.Fatalf("ordinary preference stolen: %s", out)
 	}
 }
+
+func TestConvertCodexResponseToOpenAINonStream_JSONSchemaKeepsOneJSONValue(t *testing.T) {
+	ctx := context.Background()
+	// Codex answering a strict structured request with several message items:
+	// the model serialising one object per intended turn. Appending them yields
+	// {...}{...}{...}, which fails to parse at the brace opening the second
+	// value, and clients report that as a provider error on a 200 response.
+	terminal := []byte(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.6-luna","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"step\":1}"}]},{"type":"message","content":[{"type":"output_text","text":"{\"step\":2}"}]},{"type":"message","content":[{"type":"output_text","text":"{\"step\":3}"}]}]}}`)
+
+	strictRequest := []byte(`{"model":"gpt-5.6-luna","response_format":{"type":"json_schema","json_schema":{"name":"Out","strict":true}}}`)
+	out := ConvertCodexResponseToOpenAINonStream(ctx, "gpt-5.6-luna", strictRequest, nil, terminal, nil)
+	content := gjson.GetBytes(out, "choices.0.message.content").String()
+	if !json.Valid([]byte(content)) {
+		t.Fatalf("structured content must be one parseable JSON value, got %q", content)
+	}
+	if content != `{"step":3}` {
+		t.Fatalf("structured content = %q, want the final message item", content)
+	}
+
+	// Prose callers still receive every item, unchanged.
+	proseRequest := []byte(`{"model":"gpt-5.6-luna"}`)
+	proseOut := ConvertCodexResponseToOpenAINonStream(ctx, "gpt-5.6-luna", proseRequest, nil, terminal, nil)
+	proseContent := gjson.GetBytes(proseOut, "choices.0.message.content").String()
+	if proseContent != `{"step":1}{"step":2}{"step":3}` {
+		t.Fatalf("prose content = %q, want every item concatenated", proseContent)
+	}
+
+	// A single message item is identical under both modes.
+	single := []byte(`{"type":"response.completed","response":{"id":"resp_2","model":"gpt-5.6-luna","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"only\":true}"}]}]}}`)
+	singleOut := ConvertCodexResponseToOpenAINonStream(ctx, "gpt-5.6-luna", strictRequest, nil, single, nil)
+	if got := gjson.GetBytes(singleOut, "choices.0.message.content").String(); got != `{"only":true}` {
+		t.Fatalf("single-item structured content = %q", got)
+	}
+}
+
+func TestConvertCodexResponseToOpenAINonStream_JSONSchemaKeepsFinalMessagePartsAndCitations(t *testing.T) {
+	request := []byte(`{"response_format":{"type":"json_schema"}}`)
+	terminal := []byte(`{"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"answer\":\"draft\"}","annotations":[{"type":"url_citation","url":"https://example.com","title":"Example","start_index":11,"end_index":16}]}]},{"type":"message","content":[{"type":"output_text","text":"{\"answer\":"},{"type":"output_text","text":"\"final\"}","annotations":[{"type":"url_citation","url":"https://example.com","title":"Example","start_index":1,"end_index":6}]}]}]}}`)
+	out := ConvertCodexResponseToOpenAINonStream(t.Context(), "gpt-6.1-sol", request, nil, terminal, nil)
+	if got := gjson.GetBytes(out, "choices.0.message.content").String(); got != `{"answer":"final"}` {
+		t.Fatalf("structured content = %q, want the complete final message", got)
+	}
+	annotations := gjson.GetBytes(out, "choices.0.message.annotations").Array()
+	if len(annotations) != 1 {
+		t.Fatalf("annotations = %s, want only the final message's citation", out)
+	}
+	if annotations[0].Get("start_index").Int() != 11 || annotations[0].Get("end_index").Int() != 16 {
+		t.Fatalf("citation must index the final message's combined text: %s", out)
+	}
+}
