@@ -58,6 +58,26 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - Timeouts are allowed only during credential acquisition; after an upstream connection is established, do not set timeouts for any subsequent network behavior. Intentional exceptions that must remain allowed are the Codex websocket liveness deadlines in `internal/runtime/executor/codex_websockets_executor.go`, the wsrelay session deadlines in `internal/wsrelay/session.go`, the management APICall timeout in `internal/api/handlers/management/api_tools.go`, and the `cmd/fetch_antigravity_models` utility timeouts
 - Avoid wall-clock `time.Sleep` in TTL, expiration, ordering, or cache-eviction unit tests due to platform timer granularity (e.g. Windows default timer resolution of ~15.6ms) and CI jitter under load; prefer controllable clocks (`nowFunc` / mock clock), explicit timestamp manipulation, or deterministic synchronization primitives.
 
+## Cross-Agent Review
+
+- Use `scripts/reviewer.sh review-files --worktree -- <paths...>` for explicit
+  task-scoped diffs and `review-lines -- <file:start-end>` for exact snippets.
+  Never invoke a reviewer over the whole dirty checkout.
+- Codex reviews prefer `gpt-6-astra` on the pooled local CLIProxyAPI route and
+  fall back to native/catalog `gpt-5.6-sol`; pin Sol explicitly with
+  `CODEX_REVIEWER_MODEL=gpt-5.6-sol` when needed. Claude reviews default to
+  `claude-opus-5`. Both lanes use fixed high effort.
+- The wrapper uses temporary path-scoped workspaces, removes direct API-key
+  billing fallbacks, and starts no MCP servers. Prefer the other vendor for a
+  genuine second opinion.
+- For non-trivial changes, review the completed plan once before implementation
+  and the complete task diff once after focused verification. In a dirty
+  checkout, pass only exact task paths.
+- Run `scripts/reviewer-wrapper-test.sh` after changing the wrapper or these
+  instructions. Use `scripts/reviewer.sh doctor --reviewer all` and
+  `REVIEWER_DRY_RUN=1` for prerequisite and command-resolution diagnostics.
+- `CLAUDE.md` includes this file through `@AGENTS.md`; keep that import intact.
+
 ## Agent skills
 
 ### Issue tracker
