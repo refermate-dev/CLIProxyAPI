@@ -114,6 +114,12 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	// Luna Reserve: a usage-limit 429 on an eligible credential is retried once on
+	// the reserve meter before the conductor gets to cool the credential.
+	httpResp, upstreamBody, identityState, err = e.codexReserveFallback(ctx, httpResp, from, url, auth, apiKey, req, originalPayloadSource, body, baseModel, true, opts.Headers, httpClient, upstreamBody, identityState)
+	if err != nil {
+		return nil, err
+	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		data, readErr := io.ReadAll(httpResp.Body)
 		if errClose := httpResp.Body.Close(); errClose != nil {

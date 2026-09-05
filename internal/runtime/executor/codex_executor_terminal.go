@@ -2,6 +2,8 @@ package executor
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -11,6 +13,11 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	log "github.com/sirupsen/logrus"
 )
 
 const codexIncompleteStreamMessage = "stream error: stream disconnected before completion: stream closed before response.completed"
@@ -365,6 +372,148 @@ func isCodexModelCapacityError(errorBody []byte) bool {
 }
 
 // isCodexUsageLimitError reports whether the error body represents a Codex
+
+// codexReserveModel is the wire model for Luna Reserve, OpenAI's post-limit
+// fallback for GPT-5.6 Luna. Selected Plus and Pro accounts keep working on it
+// after the advanced-model allowance is exhausted, on a separate meter
+// (additional_rate_limits[].limit_name "gpt-reserve", metered_feature
+// base_model_inference). The backend answers with the normal slug, so a client
+// that asked for gpt-5.6-luna sees gpt-5.6-luna come back.
+const codexReserveModel = "gpt-reserve"
+
+// codexReserveEligible reports whether a usage-limit rejection for baseModel on
+// auth should be retried once on the reserve meter. Reserve stands in for any
+// advanced OpenAI model, so the family check is the gpt- prefix; a request that
+// already named the reserve model is never re-substituted. OpenAI enables the
+// feature for individual Plus, Pro Lite, and Pro accounts, so Team, Business,
+// and Free credentials never get the extra round trip. An unknown plan is
+// allowed through: the worst case is one 4xx from a credential that would have
+// been cooled anyway.
+func codexReserveEligible(auth *cliproxyauth.Auth, baseModel string) bool {
+	model := strings.ToLower(strings.TrimSpace(baseModel))
+	if !strings.HasPrefix(model, "gpt-") || model == codexReserveModel {
+		return false
+	}
+	plan := ""
+	if auth != nil && auth.Attributes != nil {
+		plan = strings.ToLower(strings.TrimSpace(auth.Attributes["plan_type"]))
+	}
+	switch plan {
+	case "", "pro", "plus", "prolite", "pro_lite", "pro-lite":
+		return true
+	default:
+		return false
+	}
+}
+
+// codexReserveRetry re-sends body to url on the same credential with the model
+// swapped to the reserve wire model. It mirrors the first send exactly — cache
+// helper, auth headers, per-model header overrides, identity confusion, request
+// log — so the only difference upstream sees is the model.
+func (e *CodexExecutor) codexReserveRetry(
+	ctx context.Context,
+	from sdktranslator.Format,
+	url string,
+	auth *cliproxyauth.Auth,
+	apiKey string,
+	req cliproxyexecutor.Request,
+	originalPayloadSource []byte,
+	body []byte,
+	stream bool,
+	clientHeaders http.Header,
+	httpClient *http.Client,
+) (*http.Response, []byte, codexIdentityConfuseState, error) {
+	var identityState codexIdentityConfuseState
+	body = helps.SetStringIfDifferent(body, "model", codexReserveModel)
+	httpReq, upstreamBody, identityState, err := e.cacheHelper(ctx, from, url, auth, req, originalPayloadSource, body, clientHeaders)
+	if err != nil {
+		return nil, nil, identityState, err
+	}
+	applyCodexHeaders(httpReq, auth, apiKey, stream, e.cfg, clientHeaders)
+	applyModelHeaderOverrides(httpReq.Header, codexReserveModel)
+	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
+	var authID, authLabel, authType, authValue string
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
+		URL:       url,
+		Method:    http.MethodPost,
+		Headers:   httpReq.Header.Clone(),
+		Body:      upstreamBody,
+		Provider:  e.Identifier(),
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
+		return nil, nil, identityState, err
+	}
+	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	return httpResp, upstreamBody, identityState, nil
+}
+
+// codexReserveFallback checks a first upstream response for an exhausted
+// advanced allowance and, when the credential is reserve-eligible, performs the
+// single same-credential retry. It returns the response the caller should keep
+// treating as "the" upstream response: the reserve response when the retry was
+// attempted, or the original with its body restored when it was not.
+func (e *CodexExecutor) codexReserveFallback(
+	ctx context.Context,
+	httpResp *http.Response,
+	from sdktranslator.Format,
+	url string,
+	auth *cliproxyauth.Auth,
+	apiKey string,
+	req cliproxyexecutor.Request,
+	originalPayloadSource []byte,
+	body []byte,
+	baseModel string,
+	stream bool,
+	clientHeaders http.Header,
+	httpClient *http.Client,
+	upstreamBody []byte,
+	identityState codexIdentityConfuseState,
+) (*http.Response, []byte, codexIdentityConfuseState, error) {
+	if httpResp == nil || httpResp.StatusCode != http.StatusTooManyRequests || !codexReserveEligible(auth, baseModel) {
+		return httpResp, upstreamBody, identityState, nil
+	}
+	first, readErr := io.ReadAll(httpResp.Body)
+	if errClose := httpResp.Body.Close(); errClose != nil {
+		log.Errorf("codex executor: close response body error: %v", errClose)
+	}
+	if readErr != nil {
+		helps.RecordAPIResponseError(ctx, e.cfg, readErr)
+		return nil, upstreamBody, identityState, readErr
+	}
+	if !isCodexUsageLimitError(first) {
+		httpResp.Body = io.NopCloser(bytes.NewReader(first))
+		return httpResp, upstreamBody, identityState, nil
+	}
+	helps.AppendAPIResponseChunk(ctx, e.cfg, first)
+	helps.LogWithRequestID(ctx).Infof("codex executor: advanced allowance exhausted for model %s on auth %s; retrying once on Luna Reserve (%s)", baseModel, formatCodexAuthForLog(auth), codexReserveModel)
+	retryResp, retryBody, retryState, retryErr := e.codexReserveRetry(ctx, from, url, auth, apiKey, req, originalPayloadSource, body, stream, clientHeaders, httpClient)
+	if retryErr != nil {
+		return nil, upstreamBody, identityState, retryErr
+	}
+	return retryResp, retryBody, retryState, nil
+}
+
+func formatCodexAuthForLog(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return "<nil>"
+	}
+	if label := strings.TrimSpace(auth.Label); label != "" {
+		return label
+	}
+	return auth.ID
+}
+
 // quota/plan-limit exhaustion (error.type == "usage_limit_reached"). This is the
 // signal Codex emits when a credential's usage quota is depleted, and it carries
 // reset timing (resets_at/resets_in_seconds) parsed by parseCodexRetryAfter.
