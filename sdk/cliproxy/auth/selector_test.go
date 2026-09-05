@@ -15,6 +15,8 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	cliproxysession "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/session"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+
+	"github.com/tidwall/gjson"
 )
 
 func TestFillFirstSelectorPick_Deterministic(t *testing.T) {
@@ -2551,4 +2553,26 @@ func TestManagerSetSelectorConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestModelCooldownErrorLeadsWithUsageLimitCause(t *testing.T) {
+	cause := errors.New(`{"error":{"code":"usage_limit_reached","message":"The usage limit has been reached"}}`)
+	err := newModelCooldownErrorWithCause("gpt-5.6-luna", "codex", 4*time.Hour, cause)
+	body := err.Error()
+	message := gjson.Get(body, "error.message").String()
+	if !strings.HasPrefix(message, "Usage limit reached for model gpt-5.6-luna") {
+		t.Fatalf("message should lead with the exhausted quota, got %q", message)
+	}
+	if gjson.Get(body, "error.code").String() != "model_cooldown" {
+		t.Fatalf("structured code must stay model_cooldown, got %q", gjson.Get(body, "error.code").String())
+	}
+	if !strings.Contains(gjson.Get(body, "error.last_upstream_error").String(), "usage_limit_reached") {
+		t.Fatalf("last_upstream_error must still carry the raw cause, got %q", gjson.Get(body, "error.last_upstream_error").String())
+	}
+
+	other := newModelCooldownErrorWithCause("gpt-5.6-luna", "codex", time.Minute, errors.New("connection reset"))
+	otherMessage := gjson.Get(other.Error(), "error.message").String()
+	if !strings.HasPrefix(otherMessage, "All credentials for model gpt-5.6-luna are cooling down") {
+		t.Fatalf("non-quota cooldowns keep the historical message, got %q", otherMessage)
+	}
 }

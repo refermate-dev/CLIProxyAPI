@@ -152,7 +152,18 @@ func (e *modelCooldownError) Error() string {
 	if e.cause != nil {
 		if causeText := ExtractUpstreamErrorSummary(e.cause.Error()); causeText != "" {
 			errorBody["last_upstream_error"] = causeText
-			message += fmt.Sprintf(" (last error: %s)", causeText)
+			if strings.Contains(strings.ToLower(causeText), "usage_limit_reached") {
+				// A cooldown that exists because the quota is exhausted should say so
+				// first. "Cooling down" reads like a transient backoff, and clients
+				// often truncate the parenthetical that carried the real reason.
+				message = fmt.Sprintf("Usage limit reached for model %s", modelName)
+				if e.provider != "" {
+					message = fmt.Sprintf("%s via provider %s", message, e.provider)
+				}
+				message += fmt.Sprintf(" — all credentials are cooling down, resets in %s (last error: %s)", displayDuration.String(), causeText)
+			} else {
+				message += fmt.Sprintf(" (last error: %s)", causeText)
+			}
 			errorBody["message"] = message
 		}
 	}
