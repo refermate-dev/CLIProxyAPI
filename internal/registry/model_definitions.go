@@ -66,12 +66,12 @@ func GetCodexTeamModels() []*ModelInfo {
 
 // GetCodexPlusModels returns model definitions for the Codex plus plan tier.
 func GetCodexPlusModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus))
+	return WithCodexReserveBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus)))
 }
 
 // GetCodexProModels returns model definitions for the Codex pro plan tier.
 func GetCodexProModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))
+	return WithCodexReserveBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexPro)))
 }
 
 // GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
@@ -132,6 +132,45 @@ func WithClaudeBuiltins(models []*ModelInfo) []*ModelInfo {
 // already present in the provided slice.
 func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 	return upsertModelInfos(models, codexBuiltinImage15ModelInfo(), codexBuiltinImageModelInfo())
+}
+
+const codexBuiltinReserveModelID = "gpt-reserve"
+
+// WithCodexReserveBuiltins injects Luna Reserve, OpenAI's post-limit fallback for
+// GPT-5.6 Luna. Upstream never advertises "gpt-reserve" in a model list: the
+// official client substitutes it after the advanced-model allowance is exhausted
+// and reports the normal slug back. It is scoped to Plus and Pro because those
+// are the only plans OpenAI enables it for; Team, Business, and Free tiers must
+// not see it or a routed request would 404 upstream instead of falling back.
+func WithCodexReserveBuiltins(models []*ModelInfo) []*ModelInfo {
+	return upsertModelInfos(models, codexBuiltinReserveModelInfo())
+}
+
+func codexBuiltinReserveModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:                  codexBuiltinReserveModelID,
+		Object:              "model",
+		Created:             1788825600, // 2026-09-04
+		OwnedBy:             "openai",
+		Type:                "openai",
+		DisplayName:         "GPT Reserve",
+		Version:             "gpt-5.6",
+		Description:         "Luna Reserve: post-limit fallback capacity for GPT-5.6 Luna on eligible Plus and Pro accounts. Metered separately as base_model_inference.",
+		ContextLength:       372000,
+		MaxCompletionTokens: 128000,
+		SupportedParameters: []string{"tools"},
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh", "max"},
+		},
+		SupportedInputModalities:  []string{"text", "image"},
+		SupportedOutputModalities: []string{"text"},
+		Config: &ModelConfig{
+			OverrideHeader: map[string]string{
+				"user-agent": "codex-tui/0.144.0 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.144.0)",
+				"originator": "codex-tui",
+			},
+		},
+	}
 }
 
 // WithXAIBuiltins injects hard-coded xAI image/video model definitions that should
@@ -376,6 +415,9 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 	}
 	if modelID == claudeBuiltinFable51ModelID {
 		return claudeBuiltinFable51ModelInfo()
+	}
+	if modelID == codexBuiltinReserveModelID {
+		return codexBuiltinReserveModelInfo()
 	}
 
 	data := getModels()

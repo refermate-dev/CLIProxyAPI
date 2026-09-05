@@ -147,3 +147,39 @@ func TestAntigravityWebSearchModelForRequiresRequestedModelCapability(t *testing
 		t.Fatalf("unknown model should not get Antigravity web search model, got %q", got)
 	}
 }
+
+func TestCodexReserveBuiltinIsScopedToPlusAndPro(t *testing.T) {
+	count := func(models []*ModelInfo) int {
+		n := 0
+		for _, model := range models {
+			if model != nil && model.ID == codexBuiltinReserveModelID {
+				n++
+			}
+		}
+		return n
+	}
+	if got := count(GetCodexPlusModels()); got != 1 {
+		t.Fatalf("Plus gpt-reserve count = %d, want 1", got)
+	}
+	if got := count(GetCodexProModels()); got != 1 {
+		t.Fatalf("Pro gpt-reserve count = %d, want 1", got)
+	}
+	// Reserve is a Plus/Pro entitlement. Advertising it on Team or Free would route
+	// a request upstream that can only fail.
+	if got := count(GetCodexTeamModels()); got != 0 {
+		t.Fatalf("Team gpt-reserve count = %d, want 0", got)
+	}
+	if got := count(GetCodexFreeModels()); got != 0 {
+		t.Fatalf("Free gpt-reserve count = %d, want 0", got)
+	}
+}
+
+func TestLookupStaticModelInfoResolvesCodexReserve(t *testing.T) {
+	info := LookupStaticModelInfo(codexBuiltinReserveModelID)
+	if info == nil || info.Type != "openai" || info.DisplayName != "GPT Reserve" {
+		t.Fatalf("gpt-reserve static lookup = %+v", info)
+	}
+	if info.Config == nil || info.Config.OverrideHeader["originator"] != "codex-tui" {
+		t.Fatalf("gpt-reserve must carry the codex-tui originator override, got %+v", info.Config)
+	}
+}
