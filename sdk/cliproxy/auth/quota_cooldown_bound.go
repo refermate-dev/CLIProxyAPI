@@ -58,6 +58,19 @@ func boundedQuotaCooldown(hinted time.Duration, quota QuotaState, now time.Time,
 	return bounded, level
 }
 
+// boundQuotaDeadline also bounds deadlines inherited from persisted or sibling
+// state. It uses the already chosen backoff level without advancing it again.
+func boundQuotaDeadline(deadline, now time.Time, maximum time.Duration, level int) time.Time {
+	if deadline.IsZero() || !deadline.After(now) || maximum <= 0 {
+		return deadline
+	}
+	bounded, _ := boundedQuotaCooldown(deadline.Sub(now), QuotaState{BackoffLevel: level}, now, maximum)
+	if bounded == deadline.Sub(now) {
+		return deadline
+	}
+	return now.Add(bounded).Round(0)
+}
+
 // maxTrustedQuotaCooldown resolves the configured bound for upstream supplied
 // quota deadlines. An unset value uses defaultMaxTrustedQuotaCooldown; an
 // explicit "0" disables the bound; an unparseable value falls back to the
