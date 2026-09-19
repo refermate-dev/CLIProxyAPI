@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 )
 
@@ -297,6 +298,9 @@ func TestManager_MarkResult_CredentialScopeDoesNotInheritModelQuotaDeadline(t *t
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			m, auth := newCooldownMonotonicManager(t, "claude-fable-5-1", "claude-sonnet-5", "claude-opus-5-5", "claude-sonnet-4")
+			// This test is about scope isolation, so trust upstream deadlines
+			// verbatim instead of applying the local quota deadline bound.
+			m.SetConfig(&internalconfig.Config{QuotaExceeded: internalconfig.QuotaExceeded{MaxTrustedCooldown: "0"}})
 			ctx := context.Background()
 			for _, model := range []string{"claude-fable-5-1", "claude-sonnet-5", "claude-opus-5-5"} {
 				m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: auth.Provider, Model: model, Success: true})
