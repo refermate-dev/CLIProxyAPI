@@ -1204,4 +1204,7 @@ plugins:
 #   quota-exceeded:
 #     switch-project: true
 #     switch-preview-model: true
+#     # Local carryover of upstream PR #5973: how far ahead an upstream quota
+#     # reset deadline is trusted. Empty uses 1h; "0" trusts it verbatim.
+#     max-trusted-cooldown: 1h
 # antigravity-credits moved to oauth.providers.antigravity.antigravity-credits.
