@@ -134,6 +134,13 @@ func wrapClaudeFastRequestError(fastRequest bool, status int, err error) error {
 }
 
 func newClaudeFastDirectResponseError(resp *http.Response, body []byte) error {
+	return newClaudeFastDirectResponseErrorWithCooling(resp, body, false)
+}
+
+// newClaudeFastDirectResponseErrorWithCooling honours claude.model-level-cooling
+// the same way classifyClaudeUpstreamErrorWithCooling does, so a fast-mode 429
+// cannot cool a whole credential while ordinary requests stay model-scoped.
+func newClaudeFastDirectResponseErrorWithCooling(resp *http.Response, body []byte, modelLevelCooling bool) error {
 	if resp == nil {
 		return nil
 	}
@@ -147,7 +154,7 @@ func newClaudeFastDirectResponseError(resp *http.Response, body []byte) error {
 	credentialScoped := false
 	if resp.StatusCode == http.StatusTooManyRequests {
 		retryAfter = helps.ParseClaudeRateLimitReset(resp.Header, time.Now())
-		if helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(resp.Header) {
+		if !modelLevelCooling && helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(resp.Header) {
 			credentialScoped = true
 		}
 	}
