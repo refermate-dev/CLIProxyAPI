@@ -526,6 +526,10 @@ func convertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 	hadMessages := len(messageBlocks) > 0
 	if !preserveEmptyThinkingBlocks {
 		messageBlocks = stripTrailingClaudeThinkingBlocks(messageBlocks)
+		// LOCAL PATCH (remove when upstream fixes this): see
+		// dropAdjacentRedactedThinkingSets. It runs after the trailing strip
+		// because that one can drop the whole last message.
+		messageBlocks = dropAdjacentRedactedThinkingSets(messageBlocks)
 	}
 	// Answer dangling tool_use blocks before the prefill check below so an
 	// interrupted turn ends with a synthesized user tool_result instead of a
@@ -1691,4 +1695,70 @@ func normalizeCodexAgentMessages(payload []byte) []byte {
 		return payload
 	}
 	return updated
+}
+
+// dropAdjacentRedactedThinkingSets removes every thinking and redacted_thinking
+// block from an assistant message that carries two adjacent redacted_thinking
+// blocks.
+//
+// LOCAL PATCH (remove when upstream fixes this). Anthropic requires replayed
+// thinking blocks to match the response that produced them, as a complete set,
+// and otherwise rejects the request with "thinking or redacted_thinking blocks
+// in the latest assistant message cannot be modified". The check is not limited
+// to the latest assistant message: a captured body was rejected for a set four
+// turns back.
+//
+// The Responses input array carries no response boundary, and appendParts
+// flushes only on a role change, so reasoning items from two responses can land
+// in one assistant message. appendReasoning already collapses adjacent thinking
+// blocks to the latest one, but redacted_thinking is appended unconditionally,
+// so two adjacent redacted_thinking blocks cannot be attributed to a single
+// response. Dropping the whole set is safe because Anthropic accepts an
+// assistant message without thinking blocks. A thinking block next to a
+// redacted_thinking block is a valid single-response sequence and is kept. A
+// message holding only thinking blocks is left alone, since removing them would
+// leave empty content or two adjacent user messages. The non-Anthropic compat
+// path (preserveEmptyThinkingBlocks) is not affected.
+func dropAdjacentRedactedThinkingSets(messageBlocks [][]byte) [][]byte {
+	for index := range messageBlocks {
+		message := gjson.ParseBytes(messageBlocks[index])
+		if !strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "assistant") {
+			continue
+		}
+		content := message.Get("content")
+		if !content.IsArray() {
+			continue
+		}
+		parts := content.Array()
+		adjacentRedacted := false
+		previousRedacted := false
+		for _, part := range parts {
+			redacted := strings.TrimSpace(part.Get("type").String()) == "redacted_thinking"
+			if redacted && previousRedacted {
+				adjacentRedacted = true
+				break
+			}
+			previousRedacted = redacted
+		}
+		if !adjacentRedacted {
+			continue
+		}
+		kept := make([]string, 0, len(parts))
+		for _, part := range parts {
+			partType := strings.TrimSpace(part.Get("type").String())
+			if partType == "thinking" || partType == "redacted_thinking" {
+				continue
+			}
+			kept = append(kept, part.Raw)
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		updated, errSet := sjson.SetRawBytes(messageBlocks[index], "content", []byte("["+strings.Join(kept, ",")+"]"))
+		if errSet != nil {
+			continue
+		}
+		messageBlocks[index] = updated
+	}
+	return messageBlocks
 }
