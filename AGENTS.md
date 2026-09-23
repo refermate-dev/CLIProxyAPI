@@ -62,6 +62,29 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - Note: if modifying features that involve CLIProxyAPIHome, check if corresponding updates are needed in the CLIProxyAPIHome repository.
 - Endpoints under the `/v0/management` base URL are deprecated and no longer maintained. For any feature changes, do not modify endpoints under `/v0/management` unless necessary to fix compilation errors.
 
+## Cross-Agent Review
+
+- Use `scripts/reviewer.sh review-files --worktree -- <paths...>` for explicit
+  task-scoped diffs and `review-lines -- <file:start-end>` for exact snippets.
+  Never invoke a reviewer over the whole dirty checkout.
+- `scripts/reviewer.sh` is a shim for the shared reviewer in opencodex-ops
+  (`~/opencodex/bin/codex-reviewer`). Model pins live only in
+  `~/opencodex/lib/reviewer/reviewer-models.env`; change them there, never here.
+  `scripts/reviewer.sh doctor --reviewer all` prints the pinned values.
+- Codex reviews prefer the pinned Astra model on the pooled CLIProxyAPI route
+  and fall back to the pinned Sol model; Claude reviews default to the pinned
+  Opus model. Both lanes use fixed high effort.
+- The wrapper uses temporary path-scoped workspaces, removes direct API-key
+  billing fallbacks, and starts no MCP servers. Use GPT-6 Astra for reviews, per the user
+  preference recorded on 2026-09-07.
+- For non-trivial changes, review the completed plan once before implementation
+  and the complete task diff once after focused verification. In a dirty
+  checkout, pass only exact task paths.
+- Reviewer tests live with the master in opencodex-ops
+  (`~/opencodex/tests/reviewer/`); this repository only carries the shim. Use `scripts/reviewer.sh doctor --reviewer all` and
+  `REVIEWER_DRY_RUN=1` for prerequisite and command-resolution diagnostics.
+- `CLAUDE.md` includes this file through `@AGENTS.md`; keep that import intact.
+
 ## Agent skills
 
 ### Issue tracker
@@ -72,7 +95,7 @@ Issues are tracked in the `Refermate` Linear workspace under team `RFM`. See `do
 
 This repo uses a single-context domain-doc layout. See `docs/agents/domain.md`.
 
-## Local deployment on this Mac (branch `local-patches`)
+## Local deployment on this Mac (branch `main`)
 
 `~/.local/bin/cli-proxy-api` is built from this branch and run by the
 LaunchAgent `com.refermate.cliproxyapi`. **Never `cp` a new build over that path.**
