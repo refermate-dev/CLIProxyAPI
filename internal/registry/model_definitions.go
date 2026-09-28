@@ -20,6 +20,8 @@ const (
 	xaiBuiltinVideo15PreviewID         = "grok-imagine-video-1.5-preview"
 	xaiBuiltinSpeechModelID            = "grok-tts"
 	xaiBuiltinSpeechVoiceModelID       = "grok-voice-tts-1.0"
+	claudeBuiltinSonnet55ModelID       = "claude-sonnet-5-5"
+	claudeRetiredSonnet5ModelID        = "claude-sonnet-5"
 )
 
 // staticModelsJSON mirrors the top-level structure of models.json.
@@ -41,7 +43,41 @@ type staticModelsJSON struct {
 
 // GetClaudeModels returns the standard Claude model definitions.
 func GetClaudeModels() []*ModelInfo {
-	return cloneModelInfos(getModels().Claude)
+	return WithClaudeBuiltins(cloneModelInfos(getModels().Claude))
+}
+
+// WithClaudeBuiltins replaces Claude Sonnet 5 with Claude Sonnet 5.5 so the swap
+// does not depend on remote models.json updates, which still list Sonnet 5.
+func WithClaudeBuiltins(models []*ModelInfo) []*ModelInfo {
+	filtered := make([]*ModelInfo, 0, len(models)+1)
+	for _, model := range models {
+		if model != nil && strings.EqualFold(strings.TrimSpace(model.ID), claudeRetiredSonnet5ModelID) {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+	return upsertModelInfos(filtered, claudeBuiltinSonnet55ModelInfo())
+}
+
+func claudeBuiltinSonnet55ModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:                  claudeBuiltinSonnet55ModelID,
+		Object:              "model",
+		Created:             1790553600, // 2026-09-28
+		OwnedBy:             "anthropic",
+		Type:                "claude",
+		DisplayName:         "Claude Sonnet 5.5",
+		Description:         "Anthropic's best combination of speed and intelligence",
+		ContextLength:       1000000,
+		MaxCompletionTokens: 128000,
+		Thinking: &ThinkingSupport{
+			ZeroAllowed:    true,
+			DynamicAllowed: true,
+			Levels:         []string{"low", "medium", "high", "xhigh", "max"},
+		},
+		SupportedInputModalities:  []string{"text", "image"},
+		SupportedOutputModalities: []string{"text"},
+	}
 }
 
 // GetGeminiModels returns the standard Gemini model definitions.
@@ -567,7 +603,7 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 
 	data := getModels()
 	allModels := [][]*ModelInfo{
-		data.Claude,
+		WithClaudeBuiltins(data.Claude),
 		data.Gemini,
 		data.Vertex,
 		data.AIStudio,
