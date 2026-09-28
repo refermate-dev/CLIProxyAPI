@@ -118,6 +118,21 @@ func TestGeminiVertexModelsUseFlashLiteReleaseID(t *testing.T) {
 	t.Fatalf("Vertex models do not contain %q", releaseID)
 }
 
+func TestWithClaudeBuiltinsReplacesSonnet5WithSonnet55(t *testing.T) {
+	remote := []*ModelInfo{{ID: "claude-opus-5-5"}, {ID: claudeRetiredSonnet5ModelID}}
+	models := WithClaudeBuiltins(remote)
+	var ids []string
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	if len(ids) != 2 || ids[0] != "claude-opus-5-5" || ids[1] != claudeBuiltinSonnet55ModelID {
+		t.Fatalf("model IDs = %v, want [claude-opus-5-5 %s]", ids, claudeBuiltinSonnet55ModelID)
+	}
+	if len(remote) != 2 || remote[1].ID != claudeRetiredSonnet5ModelID {
+		t.Fatalf("input slice was mutated: %+v", remote)
+	}
+}
+
 func TestWithXAIBuiltinsIncludesImage20(t *testing.T) {
 	models := WithXAIBuiltins(nil)
 	for _, model := range models {
