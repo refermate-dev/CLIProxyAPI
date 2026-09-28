@@ -194,13 +194,13 @@
       ]
     },
     {
-      "id": "claude-sonnet-5",
+      "id": "claude-sonnet-5-5",
       "object": "model",
-      "created": 1782777600,
+      "created": 1790553600,
       "owned_by": "anthropic",
       "type": "claude",
-      "display_name": "Claude Sonnet 5",
-      "description": "Anthropic's agentic Sonnet model for coding, tool use, and enterprise workflows",
+      "display_name": "Claude Sonnet 5.5",
+      "description": "Anthropic's best combination of speed and intelligence",
       "context_length": 1000000,
       "max_completion_tokens": 128000,
       "thinking": {
