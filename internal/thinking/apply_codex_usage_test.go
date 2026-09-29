@@ -353,32 +353,32 @@ func TestApplyThinkingLogsNativeResponsesEffectiveEffort(t *testing.T) {
 	}{
 		{
 			name:       "update overrides top-level baseline",
-			body:       `{"model":"gpt-6-sol","reasoning":{"effort":"high","summary":"auto"},"input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}},{"role":"user","content":"ok"}]}`,
+			body:       `{"model":"gpt-6.1-sol","reasoning":{"effort":"high","summary":"auto"},"input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}},{"role":"user","content":"ok"}]}`,
 			wantEffort: "xhigh", wantLevel: thinking.LevelXHigh, wantMode: thinking.ModeLevel, wantBaseline: thinking.LevelHigh,
 		},
 		{
 			name:       "latest update wins",
-			body:       `{"model":"gpt-6-sol","reasoning":{"effort":"high"},"input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}},{"type":"configuration_update","reasoning":{"effort":"max"}}]}`,
+			body:       `{"model":"gpt-6.1-sol","reasoning":{"effort":"high"},"input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}},{"type":"configuration_update","reasoning":{"effort":"max"}}]}`,
 			wantEffort: "max", wantLevel: thinking.LevelMax, wantMode: thinking.ModeLevel, wantBaseline: thinking.LevelHigh,
 		},
 		{
 			name:       "trailing empty and nonstring updates keep last effective effort",
-			body:       `{"model":"gpt-6-sol","reasoning":{"effort":"high"},"input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}},{"type":"configuration_update","reasoning":{"effort":null}},{"type":"configuration_update","reasoning":{"effort":42}},{"type":"configuration_update","reasoning":{"effort":"  "}}]}`,
+			body:       `{"model":"gpt-6.1-sol","reasoning":{"effort":"high"},"input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}},{"type":"configuration_update","reasoning":{"effort":null}},{"type":"configuration_update","reasoning":{"effort":42}},{"type":"configuration_update","reasoning":{"effort":"  "}}]}`,
 			wantEffort: "xhigh", wantLevel: thinking.LevelXHigh, wantMode: thinking.ModeLevel, wantBaseline: thinking.LevelHigh,
 		},
 		{
 			name:       "top-level fallback without update",
-			body:       `{"model":"gpt-6-sol","reasoning":{"effort":"high"},"input":[{"role":"user","content":"ok"}]}`,
+			body:       `{"model":"gpt-6.1-sol","reasoning":{"effort":"high"},"input":[{"role":"user","content":"ok"}]}`,
 			wantEffort: "high", wantLevel: thinking.LevelHigh, wantMode: thinking.ModeLevel, wantBaseline: thinking.LevelHigh,
 		},
 		{
 			name:       "update without top-level effort",
-			body:       `{"model":"gpt-6-sol","input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}}]}`,
+			body:       `{"model":"gpt-6.1-sol","input":[{"type":"configuration_update","reasoning":{"effort":"xhigh"}}]}`,
 			wantEffort: "xhigh", wantLevel: thinking.LevelXHigh, wantMode: thinking.ModeLevel,
 		},
 		{
 			name:       "update disables thinking",
-			body:       `{"model":"gpt-6-sol","reasoning":{"effort":"high"},"input":[{"type":"configuration_update","reasoning":{"effort":"none"}}]}`,
+			body:       `{"model":"gpt-6.1-sol","reasoning":{"effort":"high"},"input":[{"type":"configuration_update","reasoning":{"effort":"none"}}]}`,
 			wantEffort: "none", wantMode: thinking.ModeNone, wantBaseline: thinking.LevelHigh,
 		},
 	}
@@ -395,13 +395,13 @@ func TestApplyThinkingLogsNativeResponsesEffectiveEffort(t *testing.T) {
 					var applied []byte
 					var err error
 					if bound {
-						modelInfo := registry.LookupModelInfo("gpt-6-sol", "codex")
+						modelInfo := registry.LookupModelInfo("gpt-6.1-sol", "codex")
 						if modelInfo == nil || !modelInfo.SupportConfigurationUpdate {
-							t.Fatal("gpt-6-sol must support configuration updates")
+							t.Fatal("gpt-6.1-sol must support configuration updates")
 						}
-						applied, err = thinking.ApplyThinkingWithModelInfo(body, body, "gpt-6-sol", "codex", "codex", "codex", modelInfo)
+						applied, err = thinking.ApplyThinkingWithModelInfo(body, body, "gpt-6.1-sol", "codex", "codex", "codex", modelInfo)
 					} else {
-						applied, err = thinking.ApplyThinking(body, "gpt-6-sol", "codex", "codex", "codex")
+						applied, err = thinking.ApplyThinking(body, "gpt-6.1-sol", "codex", "codex", "codex")
 					}
 					if err != nil {
 						t.Fatalf("ApplyThinking() error = %v", err)
@@ -423,7 +423,7 @@ func TestApplyThinkingLogsNativeResponsesEffectiveEffort(t *testing.T) {
 								continue
 							}
 							found = true
-							if entry.Level != log.DebugLevel || entry.Data["provider"] != "codex" || entry.Data["model"] != "gpt-6-sol" ||
+							if entry.Level != log.DebugLevel || entry.Data["provider"] != "codex" || entry.Data["model"] != "gpt-6.1-sol" ||
 								entry.Data["mode"] != tc.wantMode || entry.Data["budget"] != 0 || entry.Data["level"] != tc.wantLevel {
 								t.Errorf("unexpected native Responses log %q fields: %v", message, entry.Data)
 							}
