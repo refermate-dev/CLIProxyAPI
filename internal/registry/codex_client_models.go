@@ -58,6 +58,10 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 	if err := ValidateCodexClientModelsJSON(data); err != nil {
 		return false, fmt.Errorf("%s: %w", source, err)
 	}
+	data, err := withCodexClientSolBuiltins(data)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", source, err)
+	}
 
 	cloned := append([]byte(nil), data...)
 	codexClientCatalogStore.mu.Lock()
@@ -68,6 +72,107 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 	codexClientCatalogStore.data = cloned
 	codexClientCatalogStore.revision++
 	return true, nil
+}
+
+// withCodexClientSolBuiltins replaces GPT-6 Sol with GPT-6.1 Sol in a Codex
+// client catalog, mirroring WithCodexSolBuiltins. The remote catalog still lists
+// GPT-6 Sol, so its template is swapped in place for the embedded GPT-6.1 Sol
+// template and upgrade prompts that point at GPT-6 Sol are redirected. Catalogs
+// that no longer mention GPT-6 Sol are returned unchanged.
+func withCodexClientSolBuiltins(data []byte) ([]byte, error) {
+	if !bytes.Contains(data, []byte(`"`+codexRetiredSol6ModelID+`"`)) {
+		return data, nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("decode Codex client model catalog: %w", err)
+	}
+	var models []json.RawMessage
+	if err := json.Unmarshal(payload["models"], &models); err != nil {
+		return nil, fmt.Errorf("decode Codex client model catalog models: %w", err)
+	}
+
+	hasSol61 := false
+	for _, raw := range models {
+		if codexClientModelSlug(raw) == codexBuiltinSol61ModelID {
+			hasSol61 = true
+			break
+		}
+	}
+	out := make([]json.RawMessage, 0, len(models))
+	for _, raw := range models {
+		if codexClientModelSlug(raw) == codexRetiredSol6ModelID {
+			if hasSol61 {
+				continue
+			}
+			template, err := embeddedCodexClientSol61Template()
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, template)
+			hasSol61 = true
+			continue
+		}
+		redirected, err := redirectCodexClientSolUpgrade(raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, redirected)
+	}
+
+	encodedModels, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	payload["models"] = encodedModels
+	return json.Marshal(payload)
+}
+
+func codexClientModelSlug(raw json.RawMessage) string {
+	var model struct {
+		Slug string `json:"slug"`
+	}
+	_ = json.Unmarshal(raw, &model)
+	return strings.TrimSpace(model.Slug)
+}
+
+func embeddedCodexClientSol61Template() (json.RawMessage, error) {
+	var payload struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(embeddedCodexClientModelsJSON, &payload); err != nil {
+		return nil, fmt.Errorf("decode embedded Codex client model catalog: %w", err)
+	}
+	for _, raw := range payload.Models {
+		if codexClientModelSlug(raw) == codexBuiltinSol61ModelID {
+			return raw, nil
+		}
+	}
+	return nil, fmt.Errorf("embedded Codex client model catalog is missing %q", codexBuiltinSol61ModelID)
+}
+
+func redirectCodexClientSolUpgrade(raw json.RawMessage) (json.RawMessage, error) {
+	var model map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &model); err != nil {
+		return nil, fmt.Errorf("decode Codex client model: %w", err)
+	}
+	var upgrade map[string]any
+	if err := json.Unmarshal(model["upgrade"], &upgrade); err != nil || upgrade == nil {
+		return raw, nil
+	}
+	if target, _ := upgrade["model"].(string); strings.TrimSpace(target) != codexRetiredSol6ModelID {
+		return raw, nil
+	}
+	upgrade["model"] = codexBuiltinSol61ModelID
+	if markdown, ok := upgrade["migration_markdown"].(string); ok {
+		upgrade["migration_markdown"] = strings.Replace(markdown, "Meet GPT-6 Sol", "Meet GPT-6.1 Sol", 1)
+	}
+	encoded, err := json.Marshal(upgrade)
+	if err != nil {
+		return nil, err
+	}
+	model["upgrade"] = encoded
+	return json.Marshal(model)
 }
 
 // ValidateCodexClientModelsJSON validates the fields required to serve a
