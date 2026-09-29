@@ -13,9 +13,9 @@ func TestCodexConfigurationUpdateCapability(t *testing.T) {
 		capable []string
 	}{
 		{name: "free", models: GetCodexFreeModels, capable: []string{"gpt-6-luna"}},
-		{name: "team", models: GetCodexTeamModels, capable: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
-		{name: "plus", models: GetCodexPlusModels, capable: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
-		{name: "pro", models: GetCodexProModels, capable: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
+		{name: "team", models: GetCodexTeamModels, capable: []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}},
+		{name: "plus", models: GetCodexPlusModels, capable: []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}},
+		{name: "pro", models: GetCodexProModels, capable: []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}},
 	} {
 		t.Run(tier.name, func(t *testing.T) {
 			byID := make(map[string]*ModelInfo)
@@ -130,6 +130,36 @@ func TestWithClaudeBuiltinsReplacesSonnet5WithSonnet55(t *testing.T) {
 	}
 	if len(remote) != 2 || remote[1].ID != claudeRetiredSonnet5ModelID {
 		t.Fatalf("input slice was mutated: %+v", remote)
+	}
+}
+
+func TestWithCodexSolBuiltinsReplacesSol6WithSol61(t *testing.T) {
+	remote := []*ModelInfo{{ID: "gpt-6-astra"}, {ID: codexRetiredSol6ModelID}}
+	models := WithCodexSolBuiltins(remote)
+	var ids []string
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	if len(ids) != 2 || ids[0] != "gpt-6-astra" || ids[1] != codexBuiltinSol61ModelID {
+		t.Fatalf("model IDs = %v, want [gpt-6-astra %s]", ids, codexBuiltinSol61ModelID)
+	}
+	if len(remote) != 2 || remote[1].ID != codexRetiredSol6ModelID {
+		t.Fatalf("input slice was mutated: %+v", remote)
+	}
+	if LookupStaticModelInfo(codexRetiredSol6ModelID) != nil {
+		t.Fatalf("LookupStaticModelInfo(%q) != nil, want the retired model gone", codexRetiredSol6ModelID)
+	}
+	for _, tier := range [][]*ModelInfo{GetCodexTeamModels(), GetCodexPlusModels(), GetCodexProModels()} {
+		found := false
+		for _, model := range tier {
+			if model.ID == codexRetiredSol6ModelID {
+				t.Fatalf("tier still lists %q", codexRetiredSol6ModelID)
+			}
+			found = found || model.ID == codexBuiltinSol61ModelID
+		}
+		if !found {
+			t.Fatalf("tier does not list %q", codexBuiltinSol61ModelID)
+		}
 	}
 }
 
@@ -380,5 +410,54 @@ func TestGetDevinModelsFallback(t *testing.T) {
 	}
 	if info.DisplayName != "SWE-2" {
 		t.Errorf("info.DisplayName = %q, want SWE-2", info.DisplayName)
+	}
+}
+
+func TestEmbeddedCatalogLoadsLocallyUsedModels(t *testing.T) {
+	var catalog staticModelsJSON
+	if err := json.Unmarshal(embeddedModelsJSON, &catalog); err != nil {
+		t.Fatalf("decode embedded catalog: %v", err)
+	}
+	if err := validateModelsCatalog(&catalog); err != nil {
+		t.Fatalf("embedded catalog rejected: %v", err)
+	}
+	if getModels() == nil {
+		t.Fatal("embedded catalog did not load at init")
+	}
+	for id, wantType := range map[string]string{
+		"claude-opus-5-5":  "claude",
+		"claude-fable-5-1": "claude",
+		"gpt-6.1-sol":      "openai",
+		"gpt-6-luna":       "openai",
+		"gpt-6-astra":      "openai",
+	} {
+		info := LookupStaticModelInfo(id)
+		if info == nil {
+			t.Errorf("LookupStaticModelInfo(%q) = nil", id)
+			continue
+		}
+		if info.Type != wantType {
+			t.Errorf("LookupStaticModelInfo(%q).Type = %q, want %q", id, info.Type, wantType)
+		}
+	}
+}
+
+func TestSonnetAndSolBuiltinsKeepCatalogDefinitions(t *testing.T) {
+	claude := WithClaudeBuiltins([]*ModelInfo{
+		{ID: "claude-sonnet-5", Description: "retired"},
+		{ID: "claude-sonnet-5-5", Description: "catalog"},
+	})
+	if len(claude) != 1 || claude[0].ID != "claude-sonnet-5-5" || claude[0].Description != "catalog" {
+		t.Fatalf("WithClaudeBuiltins = %+v, want only the catalog Sonnet 5.5", claude)
+	}
+	codex := WithCodexSolBuiltins([]*ModelInfo{
+		{ID: "gpt-6-sol", Description: "retired"},
+		{ID: "gpt-6.1-sol", Description: "catalog"},
+	})
+	if len(codex) != 1 || codex[0].ID != "gpt-6.1-sol" || codex[0].Description != "catalog" {
+		t.Fatalf("WithCodexSolBuiltins = %+v, want only the catalog GPT-6.1 Sol", codex)
+	}
+	if got := WithCodexSolBuiltins(nil); len(got) != 1 || !got[0].SupportConfigurationUpdate {
+		t.Fatalf("WithCodexSolBuiltins(nil) = %+v, want the configuration-update-capable fallback", got)
 	}
 }

@@ -96,6 +96,55 @@ func TestLoadCodexClientModelsRejectsInvalidWithoutReplacing(t *testing.T) {
 	}
 }
 
+func TestLoadCodexClientModelsReplacesSol6WithSol61(t *testing.T) {
+	original, _ := GetCodexClientModelsSnapshot()
+	t.Cleanup(func() {
+		if _, err := loadCodexClientModelsFromBytes(original, "test cleanup"); err != nil {
+			t.Fatalf("restore original catalog: %v", err)
+		}
+	})
+
+	legacy := testCodexClientModel("gpt-5.6-sol", 3)
+	legacy["upgrade"] = map[string]any{"model": "gpt-6-sol", "migration_markdown": "Meet GPT-6 Sol\n\nDetails."}
+	remote := testCodexClientCatalog(t, testCodexClientModel("gpt-6-sol", 2), legacy, testCodexClientModel("gpt-5.5", 1))
+	if _, err := loadCodexClientModelsFromBytes(remote, "test"); err != nil {
+		t.Fatalf("load remote catalog: %v", err)
+	}
+
+	data, _ := GetCodexClientModelsSnapshot()
+	if err := ValidateCodexClientModelsJSON(data); err != nil {
+		t.Fatalf("swapped catalog is invalid: %v", err)
+	}
+	var payload struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("decode swapped catalog: %v", err)
+	}
+	var slugs []string
+	for _, model := range payload.Models {
+		slugs = append(slugs, model["slug"].(string))
+	}
+	if len(slugs) != 3 || slugs[0] != "gpt-6.1-sol" || slugs[1] != "gpt-5.6-sol" || slugs[2] != "gpt-5.5" {
+		t.Fatalf("slugs = %v, want [gpt-6.1-sol gpt-5.6-sol gpt-5.5]", slugs)
+	}
+	if name := payload.Models[0]["display_name"]; name != "GPT-6.1-Sol" {
+		t.Fatalf("GPT-6.1 Sol template display_name = %v, want the embedded template", name)
+	}
+	upgrade, _ := payload.Models[1]["upgrade"].(map[string]any)
+	if upgrade["model"] != "gpt-6.1-sol" || upgrade["migration_markdown"] != "Meet GPT-6.1 Sol\n\nDetails." {
+		t.Fatalf("upgrade = %v, want it redirected to gpt-6.1-sol", upgrade)
+	}
+
+	withoutSol := testCodexClientCatalog(t, testCodexClientModel("gpt-5.5", 1))
+	if _, err := loadCodexClientModelsFromBytes(withoutSol, "test without Sol"); err != nil {
+		t.Fatalf("load catalog without Sol: %v", err)
+	}
+	if data, _ = GetCodexClientModelsSnapshot(); string(data) != string(withoutSol) {
+		t.Fatalf("catalog without GPT-6 Sol was rewritten: %s", data)
+	}
+}
+
 func TestFetchCodexClientModelsFallsBackToNextURL(t *testing.T) {
 	invalidServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
