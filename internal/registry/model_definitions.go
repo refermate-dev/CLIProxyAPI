@@ -20,6 +20,8 @@ const (
 	xaiBuiltinVideo15PreviewID         = "grok-imagine-video-1.5-preview"
 	claudeBuiltinSonnet55ModelID       = "claude-sonnet-5-5"
 	claudeRetiredSonnet5ModelID        = "claude-sonnet-5"
+	codexBuiltinSol61ModelID           = "gpt-6.1-sol"
+	codexRetiredSol6ModelID            = "gpt-6-sol"
 )
 
 // staticModelsJSON mirrors the top-level structure of models.json.
@@ -45,7 +47,9 @@ func GetClaudeModels() []*ModelInfo {
 }
 
 // WithClaudeBuiltins replaces Claude Sonnet 5 with Claude Sonnet 5.5 so the swap
-// does not depend on remote models.json updates, which still list Sonnet 5.
+// does not depend on the catalog in use. Upstream catalogs list both models, so
+// Sonnet 5 is always filtered; Sonnet 5.5 is added only when the catalog lacks
+// it, so an upstream definition always wins over the local fallback.
 func WithClaudeBuiltins(models []*ModelInfo) []*ModelInfo {
 	filtered := make([]*ModelInfo, 0, len(models)+1)
 	for _, model := range models {
@@ -54,10 +58,11 @@ func WithClaudeBuiltins(models []*ModelInfo) []*ModelInfo {
 		}
 		filtered = append(filtered, model)
 	}
-	return upsertModelInfos(filtered, claudeBuiltinSonnet55ModelInfo())
+	return appendMissingModelInfos(filtered, claudeBuiltinSonnet55ModelInfo())
 }
 
 func claudeBuiltinSonnet55ModelInfo() *ModelInfo {
+	webSearch := true
 	return &ModelInfo{
 		ID:                  claudeBuiltinSonnet55ModelID,
 		Object:              "model",
@@ -75,6 +80,7 @@ func claudeBuiltinSonnet55ModelInfo() *ModelInfo {
 		},
 		SupportedInputModalities:  []string{"text", "image"},
 		SupportedOutputModalities: []string{"text"},
+		NativeCapabilities:        &NativeCapabilities{WebSearch: &webSearch},
 	}
 }
 
@@ -100,17 +106,17 @@ func GetCodexFreeModels() []*ModelInfo {
 
 // GetCodexTeamModels returns model definitions for the Codex team plan tier.
 func GetCodexTeamModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexTeam))
+	return WithCodexSolBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexTeam)))
 }
 
 // GetCodexPlusModels returns model definitions for the Codex plus plan tier.
 func GetCodexPlusModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus))
+	return WithCodexSolBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus)))
 }
 
 // GetCodexProModels returns model definitions for the Codex pro plan tier.
 func GetCodexProModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))
+	return WithCodexSolBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexPro)))
 }
 
 // GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
@@ -289,6 +295,45 @@ func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 		codexBuiltinImage25SunburstModelInfo(),
 		codexBuiltinImage25ModelInfo(),
 	)
+}
+
+// WithCodexSolBuiltins replaces GPT-6 Sol with GPT-6.1 Sol on the paid Codex
+// tiers so the swap does not depend on the catalog in use. Upstream catalogs list
+// both models, so GPT-6 Sol is always filtered; GPT-6.1 Sol is added only when
+// the catalog lacks it. Free has never listed Sol, so it is left alone.
+func WithCodexSolBuiltins(models []*ModelInfo) []*ModelInfo {
+	filtered := make([]*ModelInfo, 0, len(models)+1)
+	for _, model := range models {
+		if model != nil && strings.EqualFold(strings.TrimSpace(model.ID), codexRetiredSol6ModelID) {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+	return appendMissingModelInfos(filtered, codexBuiltinSol61ModelInfo())
+}
+
+func codexBuiltinSol61ModelInfo() *ModelInfo {
+	webSearch := true
+	return &ModelInfo{
+		ID:                  codexBuiltinSol61ModelID,
+		Object:              "model",
+		Created:             1790640000, // 2026-09-29
+		OwnedBy:             "openai",
+		Type:                "openai",
+		DisplayName:         "GPT 6.1 Sol",
+		Version:             "gpt-6.1",
+		Description:         "GPT-6.1 Sol Codex model.",
+		ContextLength:       272000,
+		MaxCompletionTokens: 128000,
+		SupportedParameters: []string{"tools"},
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh", "max"},
+		},
+		SupportedInputModalities:   []string{"text", "image"},
+		SupportedOutputModalities:  []string{"text"},
+		NativeCapabilities:         &NativeCapabilities{WebSearch: &webSearch},
+		SupportConfigurationUpdate: true,
+	}
 }
 
 // WithXAIBuiltins injects hard-coded xAI image/video model definitions that should
@@ -489,6 +534,30 @@ func upsertModelInfos(models []*ModelInfo, extras ...*ModelInfo) []*ModelInfo {
 	return filtered
 }
 
+// appendMissingModelInfos appends a clone of each extra whose ID the list does
+// not already contain. Unlike upsertModelInfos it never replaces an existing
+// definition, so a catalog entry wins over a local fallback.
+func appendMissingModelInfos(models []*ModelInfo, extras ...*ModelInfo) []*ModelInfo {
+	present := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		if model != nil {
+			present[strings.ToLower(strings.TrimSpace(model.ID))] = struct{}{}
+		}
+	}
+	for _, extra := range extras {
+		if extra == nil {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(extra.ID))
+		if _, exists := present[key]; exists || key == "" {
+			continue
+		}
+		present[key] = struct{}{}
+		models = append(models, cloneModelInfo(extra))
+	}
+	return models
+}
+
 // cloneModelInfos returns a shallow copy of the slice with each element deep-cloned.
 func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 	if len(models) == 0 {
@@ -579,7 +648,7 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Gemini,
 		data.Vertex,
 		data.AIStudio,
-		data.CodexPro,
+		WithCodexSolBuiltins(data.CodexPro),
 		data.Kimi,
 		data.Antigravity,
 		data.XAI,
