@@ -74,6 +74,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	useSIWC := codexUseSIWCForRequest(ctx, auth, opts.Headers)
 	hasExplicitInstructions := gjson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(gjson.GetBytes(req.Payload, "instructions").String()) != ""
+	body = helps.SanitizeCodexWebSearchReplay(body, auth, isCompat)
 	body = ensureWebSearchToolForHistory(body, opts.Headers)
 	if !useSIWC {
 		body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
@@ -277,6 +278,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		hasExplicitInstructions := gjson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(gjson.GetBytes(req.Payload, "instructions").String()) != ""
 		body = applyCodexSIWCCompactBodyRules(body, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
 	}
+	body = helps.SanitizeCodexWebSearchReplay(body, auth, isCompat)
 	body = ensureWebSearchToolForHistory(body, opts.Headers)
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelAndBaseURL(ctx, "codex executor", body, isCompat, resolveResponsesSignatureTargetModel(baseModel, req, opts), baseURL)
 	body = normalizeCodexParallelToolCalls(body, opts.Headers)

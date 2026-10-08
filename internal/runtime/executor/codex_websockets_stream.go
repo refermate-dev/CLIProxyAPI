@@ -895,6 +895,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	hasExplicitInstructions := gjson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(gjson.GetBytes(req.Payload, "instructions").String()) != ""
 	finalizePayload := helps.NewPayloadFinalizer(e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
+	body = helps.SanitizeCodexWebSearchReplay(body, auth, isCompat)
 	body = ensureWebSearchToolForHistory(body, opts.Headers)
 	if !useSIWC {
 		body = normalizeCodexInstructions(body, preserveNativeOutput)
