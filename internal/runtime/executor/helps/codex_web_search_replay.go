@@ -15,7 +15,7 @@ import (
 // tools, readable answers, citations and encrypted reasoning remain unchanged.
 func SanitizeCodexWebSearchReplay(body []byte, auth *cliproxyauth.Auth, isCompat bool) []byte {
 	if auth == nil || auth.AuthKind() != cliproxyauth.AuthKindOAuth || isCompat ||
-		!bytes.Contains(body, []byte(`"web_search_call"`)) {
+		(!bytes.Contains(body, []byte(`"web_search_call"`)) && !bytes.Contains(body, []byte(`\u`))) {
 		return body
 	}
 	input := util.GetGJSONBytesNoCopy(body, "input")

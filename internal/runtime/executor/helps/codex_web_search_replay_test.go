@@ -56,3 +56,13 @@ func TestSanitizeCodexWebSearchReplayNoOp(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeCodexWebSearchReplayEscapedType(t *testing.T) {
+	auth := &cliproxyauth.Auth{Metadata: map[string]any{"access_token": "test"}}
+	body := []byte(`{"input":[{"type":"web\u005fsearch_call","status":"com\u0070leted"},{"type":"message","role":"user","content":"hi"}]}`)
+	got := SanitizeCodexWebSearchReplay(body, auth, false)
+	items := gjson.GetBytes(got, "input").Array()
+	if len(items) != 1 || items[0].Get("content").String() != "hi" {
+		t.Fatalf("escaped replay artifact survived or readable history changed: %s", got)
+	}
+}
