@@ -16,7 +16,7 @@ import (
 // SIWC uses the OpenAI API route, where this replay failure has not been observed.
 func SanitizeCodexWebSearchReplay(body []byte, auth *cliproxyauth.Auth, isCompat bool) []byte {
 	if auth == nil || auth.AuthKind() != cliproxyauth.AuthKindOAuth || cliproxyauth.IsCodexUseSIWC(auth) || isCompat ||
-		!bytes.Contains(body, []byte(`"web_search_call"`)) {
+		(!bytes.Contains(body, []byte(`"web_search_call"`)) && !bytes.Contains(body, []byte(`\u`))) {
 		return body
 	}
 	input := util.GetGJSONBytesNoCopy(body, "input")
