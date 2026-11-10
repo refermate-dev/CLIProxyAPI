@@ -78,6 +78,10 @@ type Capabilities struct {
 	ModelProvider ModelProvider
 	// AuthProvider lets the host parse, login, poll, and refresh plugin provider auths.
 	AuthProvider AuthProvider
+	// AuthProviders lets a plugin register multiple provider auth entries (for example,
+	// multi-portal vendors sharing the same plugin). When non-empty, each entry is exposed
+	// under its own identifier alongside AuthProvider.
+	AuthProviders []AuthProvider
 	// FrontendAuthProvider authenticates frontend requests before proxy handling.
 	FrontendAuthProvider FrontendAuthProvider
 	// FrontendAuthProviderExclusive makes this frontend auth provider the only active request auth provider when selected.
@@ -311,6 +315,30 @@ type AuthProvider interface {
 	StartLogin(context.Context, AuthLoginStartRequest) (AuthLoginStartResponse, error)
 	PollLogin(context.Context, AuthLoginPollRequest) (AuthLoginPollResponse, error)
 	RefreshAuth(context.Context, AuthRefreshRequest) (AuthRefreshResponse, error)
+}
+
+// MultiAuthProvider is an optional extension implemented by an AuthProvider
+// that handles multiple provider identifiers (for example, multi-portal vendors).
+type MultiAuthProvider interface {
+	AuthProvider
+	Identifiers() []string
+}
+
+// AuthProviderEntry describes user-facing display metadata for one OAuth login entry.
+type AuthProviderEntry struct {
+	// Identifier is the provider key used for login and callback routing.
+	Identifier string `json:"identifier"`
+	// Name is the user-facing display label for this entry; falls back to Metadata.Name when empty.
+	Name string `json:"name,omitempty"`
+	// Logo is the display asset reference for this entry; falls back to Metadata.Logo when empty.
+	Logo string `json:"logo,omitempty"`
+}
+
+// AuthProviderEntries is an optional extension implemented by an AuthProvider
+// that publishes per-entry display metadata (name and logo).
+type AuthProviderEntries interface {
+	AuthProvider
+	AuthEntries() []AuthProviderEntry
 }
 
 // AuthLoginStartRequest asks a plugin to start a provider login flow.
@@ -1704,6 +1732,29 @@ type UsageDetail struct {
 	CacheCreationTokens int64
 	// TotalTokens is the total token count.
 	TotalTokens int64
+
+	// TextInputTokens is the optional text input token count.
+	TextInputTokens *int64
+	// ImageInputTokens is the optional image input token count.
+	ImageInputTokens *int64
+	// AudioInputTokens is the optional audio input token count.
+	AudioInputTokens *int64
+	// VideoInputTokens is the optional video input token count.
+	VideoInputTokens *int64
+	// FileInputTokens is the optional file input token count.
+	FileInputTokens *int64
+	// CachedTextTokens is the optional cached text token count.
+	CachedTextTokens *int64
+	// CachedImageTokens is the optional cached image token count.
+	CachedImageTokens *int64
+	// CachedAudioTokens is the optional cached audio token count.
+	CachedAudioTokens *int64
+	// TextOutputTokens is the optional text output token count.
+	TextOutputTokens *int64
+	// ImageOutputTokens is the optional image output token count.
+	ImageOutputTokens *int64
+	// AudioOutputTokens is the optional audio output token count.
+	AudioOutputTokens *int64
 }
 
 // QuotaProvider surfaces credential quota, balance, and billing information for management clients.

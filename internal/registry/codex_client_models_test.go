@@ -134,6 +134,12 @@ func TestLoadCodexClientModelsReplacesSol6WithSol61(t *testing.T) {
 	if name := payload.Models[0]["display_name"]; name != "GPT-6.1-Sol" {
 		t.Fatalf("GPT-6.1 Sol template display_name = %v, want the embedded template", name)
 	}
+	if levels := CodexClientModelThinkingLevels("gpt-6.1-sol"); len(levels) == 0 {
+		t.Fatal("successor model is missing its reasoning capability index")
+	}
+	if levels := CodexClientModelThinkingLevels("gpt-6-sol"); len(levels) != 0 {
+		t.Fatalf("retired model still has reasoning capability index: %v", levels)
+	}
 	upgrade, _ := payload.Models[1]["upgrade"].(map[string]any)
 	if upgrade["model"] != "gpt-6.1-sol" || upgrade["migration_markdown"] != "Meet GPT-6.1 Sol\n\nDetails." {
 		t.Fatalf("upgrade = %v, want it redirected to gpt-6.1-sol", upgrade)

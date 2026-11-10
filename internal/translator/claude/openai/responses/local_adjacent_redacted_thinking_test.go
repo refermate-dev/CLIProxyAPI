@@ -3,7 +3,7 @@ package responses
 import (
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // LOCAL PATCH test - remove together with dropAdjacentRedactedThinkingSets when
@@ -13,7 +13,7 @@ func localRedactedReasoningItem(data string) string {
 	return `{"type":"reasoning","encrypted_content":"` + ClaudeResponsesRedactedThinkingPrefix + data + `","summary":[]}`
 }
 
-func localContentTypes(message gjson.Result) []string {
+func localContentTypes(message ojson.Result) []string {
 	var kinds []string
 	for _, part := range message.Get("content").Array() {
 		kinds = append(kinds, part.Get("type").String())
@@ -21,7 +21,7 @@ func localContentTypes(message gjson.Result) []string {
 	return kinds
 }
 
-func localAssertTypes(t *testing.T, label string, message gjson.Result, want []string, out []byte) {
+func localAssertTypes(t *testing.T, label string, message ojson.Result, want []string, out []byte) {
 	t.Helper()
 	got := localContentTypes(message)
 	if len(got) != len(want) {
@@ -47,7 +47,7 @@ func TestLocalAdjacentRedactedThinkingIsDropped(t *testing.T) {
 	)
 
 	out, _ := ConvertOpenAIResponsesRequestToClaude("claude-opus-5-5", raw, false)
-	localAssertTypes(t, "assistant", gjson.GetBytes(out, "messages.1"), []string{"tool_use"}, out)
+	localAssertTypes(t, "assistant", ojson.GetBytesNoCopy(out, "messages.1"), []string{"tool_use"}, out)
 }
 
 // The sweep covers every assistant message, not only the latest one: Anthropic
@@ -67,8 +67,8 @@ func TestLocalAdjacentRedactedThinkingIsDroppedMidHistory(t *testing.T) {
 	)
 
 	out, _ := ConvertOpenAIResponsesRequestToClaude("claude-opus-5-5", raw, false)
-	localAssertTypes(t, "earlier assistant", gjson.GetBytes(out, "messages.1"), []string{"tool_use"}, out)
-	latest := gjson.GetBytes(out, "messages.3")
+	localAssertTypes(t, "earlier assistant", ojson.GetBytesNoCopy(out, "messages.1"), []string{"tool_use"}, out)
+	latest := ojson.GetBytesNoCopy(out, "messages.3")
 	localAssertTypes(t, "latest assistant", latest, []string{"thinking", "tool_use"}, out)
 	if got := latest.Get("content.0.signature").String(); got != latestSignature {
 		t.Fatalf("latest thinking signature = %q, want %q", got, latestSignature)
@@ -88,7 +88,7 @@ func TestLocalValidRedactedThinkingIsKept(t *testing.T) {
 		responsesFunctionCallOutputItem("call_1", "ok"),
 	)
 	out, _ := ConvertOpenAIResponsesRequestToClaude("claude-opus-5-5", lone, false)
-	localAssertTypes(t, "lone redacted", gjson.GetBytes(out, "messages.1"), []string{"redacted_thinking", "tool_use"}, out)
+	localAssertTypes(t, "lone redacted", ojson.GetBytesNoCopy(out, "messages.1"), []string{"redacted_thinking", "tool_use"}, out)
 
 	mixed := responsesRequestFromItems(
 		`{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`,
@@ -99,7 +99,7 @@ func TestLocalValidRedactedThinkingIsKept(t *testing.T) {
 		responsesFunctionCallOutputItem("call_1", "ok"),
 	)
 	out, _ = ConvertOpenAIResponsesRequestToClaude("claude-opus-5-5", mixed, false)
-	localAssertTypes(t, "mixed", gjson.GetBytes(out, "messages.1"), []string{"thinking", "redacted_thinking", "thinking", "tool_use"}, out)
+	localAssertTypes(t, "mixed", ojson.GetBytesNoCopy(out, "messages.1"), []string{"thinking", "redacted_thinking", "thinking", "tool_use"}, out)
 }
 
 // A thinking-only assistant message would become empty content, so the sweep
@@ -123,5 +123,5 @@ func TestLocalAdjacentRedactedThinkingEdgeCases(t *testing.T) {
 		responsesFunctionCallOutputItem("call_1", "ok"),
 	)
 	out, _ := ConvertOpenAIResponsesRequestToClaudeWithCompat("claude-opus-5-5", raw, false)
-	localAssertTypes(t, "compat", gjson.GetBytes(out, "messages.1"), []string{"redacted_thinking", "redacted_thinking", "tool_use"}, out)
+	localAssertTypes(t, "compat", ojson.GetBytesNoCopy(out, "messages.1"), []string{"redacted_thinking", "redacted_thinking", "tool_use"}, out)
 }

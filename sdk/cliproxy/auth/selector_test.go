@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	cliproxysession "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestFillFirstSelectorPick_Deterministic(t *testing.T) {
@@ -206,16 +206,14 @@ func TestAuthWeight_InvalidAndOverflowValuesAreExcluded(t *testing.T) {
 	}
 }
 
-func TestPickSmoothWeightedAuth_SaturatesCorruptState(t *testing.T) {
+func TestSmoothWeightedStateCharge_SaturatesAndClampsCorruptState(t *testing.T) {
 	t.Parallel()
 
-	current := map[string]int64{"a": math.MaxInt64, "b": math.MinInt64}
-	picked := pickSmoothWeightedAuth([]*Auth{{ID: "a"}, {ID: "b"}}, current)
-	if picked == nil {
-		t.Fatal("pickSmoothWeightedAuth() returned nil")
-	}
-	if current["a"] != math.MaxInt64-2 || current["b"] != math.MinInt64+1 {
-		t.Fatalf("current state = %#v, want saturated arithmetic", current)
+	state := weightedPoolForTest("route", map[string]int64{"a": 1, "b": 1}, map[string]int64{"a": math.MaxInt64, "b": math.MinInt64})
+	state.charge(0, false)
+	limit := maxSmoothWeightedCreditRounds * 2
+	if state.currentForTest()["a"] != limit || state.currentForTest()["b"] != -limit {
+		t.Fatalf("current state = %#v, want saturated and clamped arithmetic", state.currentForTest())
 	}
 }
 
@@ -2706,19 +2704,19 @@ func TestModelCooldownErrorLeadsWithUsageLimitCause(t *testing.T) {
 	cause := errors.New(`{"error":{"code":"usage_limit_reached","message":"The usage limit has been reached"}}`)
 	err := newModelCooldownErrorWithCause("gpt-5.6-luna", "codex", 4*time.Hour, cause)
 	body := err.Error()
-	message := gjson.Get(body, "error.message").String()
+	message := ojson.Get(body, "error.message").String()
 	if !strings.HasPrefix(message, "Usage limit reached for model gpt-5.6-luna") {
 		t.Fatalf("message should lead with the exhausted quota, got %q", message)
 	}
-	if gjson.Get(body, "error.code").String() != "model_cooldown" {
-		t.Fatalf("structured code must stay model_cooldown, got %q", gjson.Get(body, "error.code").String())
+	if ojson.Get(body, "error.code").String() != "model_cooldown" {
+		t.Fatalf("structured code must stay model_cooldown, got %q", ojson.Get(body, "error.code").String())
 	}
-	if !strings.Contains(gjson.Get(body, "error.last_upstream_error").String(), "usage_limit_reached") {
-		t.Fatalf("last_upstream_error must still carry the raw cause, got %q", gjson.Get(body, "error.last_upstream_error").String())
+	if !strings.Contains(ojson.Get(body, "error.last_upstream_error").String(), "usage_limit_reached") {
+		t.Fatalf("last_upstream_error must still carry the raw cause, got %q", ojson.Get(body, "error.last_upstream_error").String())
 	}
 
 	other := newModelCooldownErrorWithCause("gpt-5.6-luna", "codex", time.Minute, errors.New("connection reset"))
-	otherMessage := gjson.Get(other.Error(), "error.message").String()
+	otherMessage := ojson.Get(other.Error(), "error.message").String()
 	if !strings.HasPrefix(otherMessage, "All credentials for model gpt-5.6-luna are cooling down") {
 		t.Fatalf("non-quota cooldowns keep the historical message, got %q", otherMessage)
 	}

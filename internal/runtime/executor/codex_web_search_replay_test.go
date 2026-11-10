@@ -7,13 +7,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	_ "github.com/router-for-me/CLIProxyAPI/v8/internal/translator"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func webSearchReplayRequest() []byte {
@@ -25,7 +25,7 @@ func assertWebSearchReplayBody(t *testing.T, body []byte, wantSearch int) {
 	search := 0
 	reasoning := 0
 	citations := 0
-	for _, item := range gjson.GetBytes(body, "input").Array() {
+	for _, item := range ojson.GetBytesNoCopy(body, "input").Array() {
 		if item.Get("type").String() == "web_search_call" {
 			search++
 		}
@@ -39,7 +39,7 @@ func assertWebSearchReplayBody(t *testing.T, body []byte, wantSearch int) {
 	if search != wantSearch || reasoning != 1 || citations != 1 {
 		t.Fatalf("search=%d reasoning=%d citations=%d body=%s", search, reasoning, citations, body)
 	}
-	if !gjson.GetBytes(body, `tools.#(type=="web_search")`).Exists() {
+	if !ojson.GetBytesNoCopy(body, `tools.#(type=="web_search")`).Exists() {
 		t.Fatal("web-search availability was removed")
 	}
 }
@@ -157,7 +157,7 @@ func TestCodexWebSearchReplayWebsocket(t *testing.T) {
 
 func TestCodexWebSearchReplayPreservesPayloadOverride(t *testing.T) {
 	auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "test"}}
-	input := gjson.GetBytes(webSearchReplayRequest(), "input").Value()
+	input := ojson.GetBytesNoCopy(webSearchReplayRequest(), "input").Value()
 	cfg := &config.Config{Payload: config.PayloadConfig{Override: []config.PayloadRule{{Models: []config.PayloadModelRule{{Name: "gpt-6-astra"}}, Params: map[string]any{"input": input}}}}}
 	cfg.DisableImageGeneration = config.DisableImageGenerationAll
 	e := NewCodexWebsocketsExecutor(cfg)
@@ -177,7 +177,7 @@ func webSearchReplayConfig(variant string) *config.Config {
 	case "payload-override":
 		cfg.Payload.Override = []config.PayloadRule{{
 			Models: []config.PayloadModelRule{{Name: "gpt-6-astra", Match: []map[string]any{{"input.#": 3}}}},
-			Params: map[string]any{"input": gjson.GetBytes(webSearchReplayRequest(), "input").Value()},
+			Params: map[string]any{"input": ojson.GetBytesNoCopy(webSearchReplayRequest(), "input").Value()},
 		}}
 	case "payload-filter":
 		cfg.Payload.Filter = []config.PayloadFilterRule{{

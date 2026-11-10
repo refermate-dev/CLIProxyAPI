@@ -1,11 +1,11 @@
 package responses
 
 import (
-	"encoding/base64"
 	"encoding/binary"
+	"github.com/MoeForge/moego/base64"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 	"google.golang.org/protobuf/encoding/protowire"
 
 	sigcompat "github.com/router-for-me/CLIProxyAPI/v8/internal/signature"
@@ -53,17 +53,20 @@ func TestDropForeignReasoningReplayForGPTTarget(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out := dropForeignReasoningReplayForGPTTarget(foreignReasoningFixture(t, tc.blob))
-			got := gjson.GetBytes(out, "input.#")
+			out, err := ConvertOpenAIResponsesRequestToCodex("gpt-6.1-sol", foreignReasoningFixture(t, tc.blob), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := ojson.GetBytesNoCopy(out, "input.#")
 			// Guard the serialization path, not just the count: a dropped item must
 			// leave the retained items as JSON objects, not base64-marshaled strings.
-			firstType := gjson.GetBytes(out, "input.0.type")
+			firstType := ojson.GetBytesNoCopy(out, "input.0.type")
 			if firstType.String() != "reasoning" && firstType.String() != "message" {
 				t.Fatalf("input.0.type = %q, want reasoning or message object", firstType.String())
 			}
 			if tc.blob == "" {
 				// Empty blob keeps the reasoning item; verify its content survived.
-				if gjson.GetBytes(out, "input.0.encrypted_content").String() != "" {
+				if ojson.GetBytesNoCopy(out, "input.0.encrypted_content").String() != "" {
 					t.Fatal("empty blob item was mutated")
 				}
 			}
