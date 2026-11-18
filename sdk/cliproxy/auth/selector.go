@@ -1281,6 +1281,9 @@ func isAuthBlockedForModelForRequest(ctx context.Context, auth *Auth, model stri
 	}
 	if authForce := effectiveAuthForceUntil(auth); authForce.After(now) && auth.NextRetryAfter.After(now) {
 		next := authForce
+		if auth.credentialRetryAfter.After(next) {
+			next = auth.credentialRetryAfter
+		}
 		if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(next) {
 			next = auth.Quota.NextRecoverAt
 		}

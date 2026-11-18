@@ -417,3 +417,58 @@ func TestAuthQuotaRearmPreservesMixedNonQuotaRetry(t *testing.T) {
 		t.Fatalf("auth non-quota retry shortened: %s", auth.NextRetryAfter)
 	}
 }
+
+func TestRestoreCooldownStatesBoundsIndependentQuota(t *testing.T) {
+	for _, nonQuotaRetry := range []bool{false, true} {
+		t.Run(map[bool]string{false: "quota", true: "longer non-quota retry"}[nonQuotaRetry], func(t *testing.T) {
+			now := time.Now()
+			quotaNext := now.Add(7 * 24 * time.Hour)
+			retryNext := quotaNext
+			lastError := &Error{HTTPStatus: http.StatusTooManyRequests}
+			if nonQuotaRetry {
+				retryNext = now.Add(8 * 24 * time.Hour)
+				lastError = &Error{HTTPStatus: http.StatusServiceUnavailable}
+			}
+			manager := NewManager(nil, nil, nil)
+			if _, err := manager.Register(WithSkipPersist(context.Background()), &Auth{ID: "shadow-quota", Provider: "claude"}); err != nil {
+				t.Fatal(err)
+			}
+			store := &recordingCooldownStateStore{load: []CooldownStateRecord{{
+				Provider: "claude", AuthID: "shadow-quota", Model: "claude-opus-5-5",
+				NextRetryAfter: now.Add(30 * time.Minute),
+				Quota:          QuotaState{Exceeded: true, Reason: "credential_quota", NextRecoverAt: now.Add(30 * time.Minute)},
+				LastError:      &Error{HTTPStatus: http.StatusTooManyRequests}, UpdatedAt: now,
+				IndependentState: &ModelState{
+					Unavailable: true, Status: StatusError, UpdatedAt: now,
+					NextRetryAfter: retryNext, LastError: lastError,
+					Quota: QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: quotaNext},
+				},
+			}}}
+			manager.SetCooldownStateStore(store)
+			if err := manager.RestoreCooldownStates(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			auth, _ := manager.GetByID("shadow-quota")
+			state := existingModelState(auth, "claude-opus-5-5")
+			if state == nil || state.credentialQuotaShadow == nil {
+				t.Fatal("restored independent quota layer missing")
+			}
+			shadow := state.credentialQuotaShadow
+			if next := shadow.Quota.NextRecoverAt; next.Before(now.Add(59*time.Minute)) || next.After(now.Add(61*time.Minute)) {
+				t.Fatalf("independent quota deadline = %s, want about one hour", next)
+			}
+			if nonQuotaRetry {
+				if !shadow.NextRetryAfter.Equal(retryNext) || !state.NextRetryAfter.Equal(retryNext) {
+					t.Fatal("longer non-quota retry was shortened")
+				}
+			} else if shadow.NextRetryAfter.After(now.Add(61*time.Minute)) || state.NextRetryAfter.After(now.Add(61*time.Minute)) {
+				t.Fatal("restored independent quota bypassed the bound")
+			}
+			for _, record := range store.savedRecords() {
+				if record.IndependentState != nil && record.IndependentState.Quota.NextRecoverAt.After(now.Add(61*time.Minute)) {
+					t.Fatal("unbounded independent quota persisted")
+				}
+			}
+		})
+	}
+}

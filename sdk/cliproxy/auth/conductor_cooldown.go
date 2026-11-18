@@ -611,6 +611,14 @@ func (m *Manager) restoreCooldownRecordLocked(record CooldownStateRecord, now ti
 		var restoredShadow *ModelState
 		if record.IndependentState != nil {
 			restoredShadow = record.IndependentState.cloneShallow()
+			if restoredShadow.Quota.Exceeded {
+				quotaNext := restoredShadow.Quota.NextRecoverAt
+				maximum := m.maxTrustedQuotaCooldown()
+				restoredShadow.Quota.NextRecoverAt = boundQuotaDeadline(quotaNext, now, maximum, restoredShadow.Quota.BackoffLevel)
+				if mayBeQuotaRetry(restoredShadow.LastError) && !quotaNext.IsZero() && !restoredShadow.NextRetryAfter.After(quotaNext) {
+					restoredShadow.NextRetryAfter = boundQuotaDeadline(restoredShadow.NextRetryAfter, now, maximum, restoredShadow.Quota.BackoffLevel)
+				}
+			}
 			restoredShadow.Quota.cooldownEvaluated = restoredShadow.Quota.Exceeded
 			if indepForceUntil.After(restoredShadow.forceCooldownUntil) {
 				restoredShadow.forceCooldownUntil = indepForceUntil

@@ -2721,3 +2721,30 @@ func TestModelCooldownErrorLeadsWithUsageLimitCause(t *testing.T) {
 		t.Fatalf("non-quota cooldowns keep the historical message, got %q", otherMessage)
 	}
 }
+
+func TestForcedCooldownSelectionIncludesCredentialRetry(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name                           string
+		force, credential, model, want time.Duration
+	}{
+		{"longer credential retry", 30 * time.Second, 90 * time.Second, 0, 90 * time.Second},
+		{"longer forced cooldown", 90 * time.Second, 30 * time.Second, 0, 90 * time.Second},
+		{"longer model cooldown", 30 * time.Second, 90 * time.Second, 2 * time.Minute, 2 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := &Auth{
+				ID: "overlapping-deadlines", Provider: "claude", Status: StatusError,
+				Unavailable: true, NextRetryAfter: now.Add(tc.want),
+				forceCooldownUntil: now.Add(tc.force), credentialRetryAfter: now.Add(tc.credential), forceCooldownSeeded: true,
+			}
+			if tc.model > 0 {
+				auth.ModelStates = map[string]*ModelState{"model": {Unavailable: true, NextRetryAfter: now.Add(tc.model)}}
+			}
+			blocked, reason, next := isAuthBlockedForModel(auth, "model", now)
+			if !blocked || reason != blockReasonCooldown || !next.Equal(now.Add(tc.want)) {
+				t.Fatalf("selection = %v %v %s, want blocked until %s", blocked, reason, next, now.Add(tc.want))
+			}
+		})
+	}
+}
