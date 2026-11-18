@@ -408,6 +408,19 @@ func (m *Manager) restoreCooldownRecordLocked(record CooldownStateRecord, now ti
 			restoredRetryAfter = boundQuotaDeadline(restoredRetryAfter, now, maximum, quota.BackoffLevel)
 		}
 	}
+	// A wrapped record's retry may already include its independent quota
+	// shadow. Bound that inherited deadline before the monotonic merge.
+	if independent := record.IndependentState; independent != nil && quota.Exceeded && independent.Quota.Exceeded &&
+		mayBeQuotaRetry(record.LastError) && mayBeQuotaRetry(independent.LastError) &&
+		!independent.Quota.NextRecoverAt.IsZero() && !independent.NextRetryAfter.After(independent.Quota.NextRecoverAt) &&
+		!restoredRetryAfter.After(independent.NextRetryAfter) {
+		restoredRetryAfter = boundQuotaDeadline(restoredRetryAfter, now, m.maxTrustedQuotaCooldown(), independent.Quota.BackoffLevel)
+		for _, deadline := range []time.Time{quota.NextRecoverAt, recordOuterForceUntil(record), record.QuotaForceCooldownUntil, record.NonQuotaCooldownUntil} {
+			if deadline.After(restoredRetryAfter) {
+				restoredRetryAfter = deadline
+			}
+		}
+	}
 	quota.cooldownEvaluated = quota.Exceeded
 	if executorKeyFromAuth(auth) == "claude" || strings.EqualFold(strings.TrimSpace(record.Provider), "claude") {
 		quota.cooldownSignals = sanitizePersistedClaudeCooldownSignals(record.CooldownSignals)

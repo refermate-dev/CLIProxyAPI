@@ -435,7 +435,7 @@ func TestRestoreCooldownStatesBoundsIndependentQuota(t *testing.T) {
 			}
 			store := &recordingCooldownStateStore{load: []CooldownStateRecord{{
 				Provider: "claude", AuthID: "shadow-quota", Model: "claude-opus-5-5",
-				NextRetryAfter: now.Add(30 * time.Minute),
+				NextRetryAfter: retryNext,
 				Quota:          QuotaState{Exceeded: true, Reason: "credential_quota", NextRecoverAt: now.Add(30 * time.Minute)},
 				LastError:      &Error{HTTPStatus: http.StatusTooManyRequests}, UpdatedAt: now,
 				IndependentState: &ModelState{
