@@ -411,13 +411,17 @@ func (m *Manager) restoreCooldownRecordLocked(record CooldownStateRecord, now ti
 	// A wrapped record's retry may already include its independent quota
 	// shadow. Bound that inherited deadline before the monotonic merge.
 	if independent := record.IndependentState; independent != nil && quota.Exceeded && independent.Quota.Exceeded &&
-		mayBeQuotaRetry(record.LastError) && mayBeQuotaRetry(independent.LastError) &&
-		!independent.Quota.NextRecoverAt.IsZero() && !independent.NextRetryAfter.After(independent.Quota.NextRecoverAt) &&
-		!restoredRetryAfter.After(independent.NextRetryAfter) {
-		restoredRetryAfter = boundQuotaDeadline(restoredRetryAfter, now, m.maxTrustedQuotaCooldown(), independent.Quota.BackoffLevel)
-		for _, deadline := range []time.Time{quota.NextRecoverAt, recordOuterForceUntil(record), record.QuotaForceCooldownUntil, record.NonQuotaCooldownUntil} {
-			if deadline.After(restoredRetryAfter) {
-				restoredRetryAfter = deadline
+		mayBeQuotaRetry(record.LastError) && mayBeQuotaRetry(independent.LastError) {
+		independentQuotaNext := independent.Quota.NextRecoverAt
+		if independentQuotaNext.IsZero() {
+			independentQuotaNext = independent.NextRetryAfter
+		}
+		if !independentQuotaNext.IsZero() && !independent.NextRetryAfter.After(independentQuotaNext) && !restoredRetryAfter.After(independent.NextRetryAfter) {
+			restoredRetryAfter = boundQuotaDeadline(restoredRetryAfter, now, m.maxTrustedQuotaCooldown(), independent.Quota.BackoffLevel)
+			for _, deadline := range []time.Time{quota.NextRecoverAt, recordOuterForceUntil(record), record.QuotaForceCooldownUntil, record.NonQuotaCooldownUntil} {
+				if deadline.After(restoredRetryAfter) {
+					restoredRetryAfter = deadline
+				}
 			}
 		}
 	}
@@ -626,6 +630,9 @@ func (m *Manager) restoreCooldownRecordLocked(record CooldownStateRecord, now ti
 			restoredShadow = record.IndependentState.cloneShallow()
 			if restoredShadow.Quota.Exceeded {
 				quotaNext := restoredShadow.Quota.NextRecoverAt
+				if quotaNext.IsZero() {
+					quotaNext = restoredShadow.NextRetryAfter
+				}
 				maximum := m.maxTrustedQuotaCooldown()
 				restoredShadow.Quota.NextRecoverAt = boundQuotaDeadline(quotaNext, now, maximum, restoredShadow.Quota.BackoffLevel)
 				if mayBeQuotaRetry(restoredShadow.LastError) && !quotaNext.IsZero() && !restoredShadow.NextRetryAfter.After(quotaNext) {
